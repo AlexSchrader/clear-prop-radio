@@ -89,6 +89,15 @@ button{cursor:pointer}
 .live .warn{margin-top:8px;color:#c2410c;font-weight:600}
 :root:not([data-theme="light"]) .live .warn{color:#fbbf24}
 .hidden{display:none}
+.live .pausebtn{width:100%;margin-top:10px;padding:16px;border-radius:12px;font-weight:700;font-size:18px;border:2px solid var(--btn);background:var(--btn);color:var(--btnText)}
+.live .pausebtn[aria-pressed="true"]{background:transparent;color:var(--ink)}
+.live .mentor{margin-top:8px;font-size:14px;color:var(--dim)}
+.tune{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.lcd .freq.tune{text-decoration-thickness:2px}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(96px + env(safe-area-inset-bottom,0px));max-width:528px;margin:0 auto;
+  padding:12px 14px;border-radius:12px;background:var(--lcd);color:var(--lcdText);font-weight:600;text-align:center;
+  box-shadow:0 6px 20px rgba(0,0,0,.25);z-index:20;transition:opacity .2s}
+.toast.err{color:#fca5a5}
 .results{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin:-6px 0 12px;overflow:hidden}
 .results button{display:block;width:100%;text-align:left;padding:10px 12px;border:0;border-bottom:1px solid var(--line);background:transparent}
 .results button:last-child{border-bottom:0}
@@ -117,6 +126,8 @@ button{cursor:pointer}
       <div class="top"><span class="dot" id="lv-dot"></span><span id="lv-status">Connecting to SayIntentions…</span></div>
       <div id="lv-atc"></div>
       <div id="lv-me"></div>
+      <div class="mentor hidden" id="lv-mentor"></div>
+      <button class="pausebtn" id="lv-pause" aria-pressed="false">Pause sim</button>
     </div>
     <div id="setup">
       <div class="field"><label for="f-q">Airport</label><input id="f-q" placeholder="Code, name, or city" autocomplete="off" autocapitalize="characters"></div>
@@ -180,6 +191,7 @@ button{cursor:pointer}
     <div class="field"><label for="m-type">Aircraft (how you say it)</label>
       <select id="m-type"><option>Cirrus</option><option>Diamond</option><option>Cessna</option><option>Skyhawk</option><option>Piper</option></select></div>
     <div class="ladder"><label><input type="checkbox" id="m-student"><span><b>Say "student pilot" on first contact</b><br><span class="hint">Controllers slow down and give you more room.</span></span></label></div>
+    <div class="ladder hidden" id="m-mentor-wrap"><label><input type="checkbox" id="m-mentor"><span><b>Mentor mode: co-pilot says the readback out loud</b><br><span class="hint">Live only. Uses SayIntentions voice, up to 30 times per flight.</span></span></label></div>
     <p class="hint" id="m-preview"></p>
   </section>
 
@@ -325,6 +337,8 @@ function renderStep(){
   step = Math.max(0, Math.min(step, steps.length-1));
   const s = steps[step];
   $("lcd-freq").textContent = s.f || "—";
+  $("lcd-freq").dataset.freq = s.f || "";
+  $("lcd-freq").classList.toggle("tune", LIVE && !!s.f);
   $("lcd-stn").textContent = `${flight.ap.id} ${s.st}`;
   $("prog").innerHTML = steps.map((_,i)=>`<i class="${i<=step?"on":""}"></i>`).join("");
   const atc = s.atc ? `<div class="atc"><div class="who">If ATC says</div><p>"${s.atc.says}"</p><p class="rb">${s.atc.rb.startsWith("Nothing")?s.atc.rb:"You read back: \""+s.atc.rb+"\""}</p></div>` : "";
@@ -346,7 +360,7 @@ function rwOpts(ap){
 }
 function freqRows(ap){
   const L = [["ATIS",ap.atis],["CTAF",ap.ctaf],["Clearance",ap.clr],["Ground",ap.gnd],["Tower",ap.twr],["Approach",ap.app]].filter(x=>x[1]);
-  return L.length ? `<div class="freqs">${L.map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join("")}</div>` : `<small>No frequencies listed. Use CTAF 122.9.</small>`;
+  return L.length ? `<div class="freqs">${L.map(([k,v])=>`<span>${k}</span><span${LIVE?` class="tune" data-freq="${esc(v)}" role="button"`:""}>${esc(v)}</span>`).join("")}</div>` : `<small>No frequencies listed. Use CTAF 122.9.</small>`;
 }
 function pick(id){
   cur = apGet(id); if(!cur) return;
@@ -440,6 +454,51 @@ $("ladder").onchange = e=>{ const i=+e.target.dataset.rung; ladderDone = e.targe
 /* ===== LIVE: SayIntentions via local bridge ===== */
 const LIVE = location.protocol === "http:";
 let liveFreq = {}, lastAtcId = null, lastMeId = null, liveAp = null, aiOn = false;
+let liveSeeded = false, paused = false, mentorOn = store.get("mentor", false), mentorCount = {used:0, cap:30};
+let toastTimer = null;
+function toast(msg, err){
+  let t = $("toast");
+  if(!t){ t = document.createElement("div"); t.id = "toast"; t.className = "toast"; t.setAttribute("role","status"); document.body.appendChild(t); }
+  t.textContent = msg; t.classList.toggle("err", !!err); t.style.opacity = "1"; t.classList.remove("hidden");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>{ t.style.opacity = "0"; setTimeout(()=>t.classList.add("hidden"),200); }, err?4500:3000);
+}
+async function bridgePost(path, body){
+  try{
+    const r = await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    return await r.json();
+  }catch(e){ return {error:"Can't reach the bridge on your PC."}; }
+}
+const validFreq = f => { const n = parseFloat(f); return /^\d{3}(\.\d{1,3})?$/.test(String(f).trim()) && n>=118 && n<=136.975; };
+async function tune(freq){
+  if(!LIVE || !freq) return;
+  if(!validFreq(freq)){ toast(`${freq} isn't an airband frequency (118.000–136.975).`, true); return; }
+  const out = await bridgePost("/api/tune",{freq:String(freq).trim(), com:1, mode:"standby"});
+  if(out.error) toast(out.error, true);
+  else toast(`${freq} in COM1 standby, press swap`);
+}
+function renderPause(){ const b = $("lv-pause"); b.textContent = paused ? "Resume sim" : "Pause sim"; b.setAttribute("aria-pressed", paused); }
+function renderMentor(){
+  $("lv-mentor").classList.toggle("hidden", !mentorOn);
+  $("lv-mentor").textContent = `Mentor: ${mentorCount.used}/${mentorCount.cap} used`;
+}
+async function mentorSay(entry, rb){
+  if(!mentorOn || !rb) return;
+  if(mentorCount.used >= mentorCount.cap){ toast(`Mentor limit reached (${mentorCount.cap} this flight).`, true); return; }
+  const out = await bridgePost("/api/mentor",{id:String(entry.id), message:`Read back: ${rb}`.slice(0,255)});
+  if(out.used !== undefined){ mentorCount = {used:out.used, cap:out.cap}; renderMentor(); }
+  if(out.error) toast(out.error, true);
+}
+if(LIVE){
+  document.addEventListener("click", e=>{ const el = e.target.closest(".tune[data-freq]"); if(el) tune(el.dataset.freq); });
+  $("lv-pause").onclick = async ()=>{
+    const want = paused ? 0 : 1, out = await bridgePost("/api/pause",{value:want});
+    if(out.error){ toast(out.error, true); return; }
+    paused = !!want; renderPause(); toast(paused ? "Sim paused" : "Sim resumed");
+  };
+  $("m-mentor-wrap").classList.remove("hidden");
+  $("m-mentor").checked = mentorOn;
+  $("m-mentor").onchange = ()=>{ mentorOn = $("m-mentor").checked; store.set("mentor", mentorOn); renderMentor(); };
+}
 const _apGet = apGet;
 apGet = function(id){
   const a = _apGet(id); if(!a) return a;
@@ -480,9 +539,9 @@ function readbackFor(text){
   if(/cleared out of/i.test(T)) parts.push("cleared out of the Class C");
   if(/special vfr/i.test(T)) parts.push("special VFR");
   const hdg = T.match(/heading\s+(\d{3})/i); if(hdg) parts.push(`heading ${hdg[1]}`);
-  const alt = T.match(/(climb|descend)(?: and maintain)?\s+([\d,]+)/i);
+  const alt = T.match(/(climb|descend)(?: and maintain)?\s+(\d{1,3}(?:,\d{3})+|\d+)/i);
   if(alt) parts.push(`${alt[1].toLowerCase()} and maintain ${alt[2]}`);
-  else { const ab = T.match(/at or (below|above)\s+([\d,]+|one thousand)/i) || T.match(/maintain\s+([\d,]{3,})/i);
+  else { const ab = T.match(/at or (below|above)\s+(\d{1,3}(?:,\d{3})+|\d+|one thousand)/i) || T.match(/maintain\s+(\d{1,3}(?:,\d{3})+|\d{3,})/i);
     if(ab) parts.push(ab.length>2 ? `at or ${ab[1].toLowerCase()} ${ab[2]}` : `maintain ${ab[1]}`); }
   const fq = T.match(/(departure|tower|ground|approach|center|clearance)\D{0,25}?(\d{3}\.\d{1,3})/i);
   if(fq) parts.push(`${fq[1].toLowerCase()} ${fq[2]}`);
@@ -490,6 +549,23 @@ function readbackFor(text){
   if(!parts.length) return `Roger, ${shortCS()}.`;
   const out = parts.join(", ");
   return out.charAt(0).toUpperCase() + out.slice(1) + `, ${shortCS()}.`;
+}
+// SayIntentions sends the spoken callsign, e.g. "Skyhawk-One-Two-Three-Alpha-Zulu". Turn it into {type:"Skyhawk", tail:"N123AZ"}.
+function parseCallsign(raw){
+  raw = String(raw||"").trim(); if(!raw) return null;
+  if(/^N?[0-9][0-9A-Z]{0,5}$/i.test(raw)) return {tail: raw.toUpperCase().replace(/^(?!N)/,"N"), type:""};
+  const WORD = {}; Object.entries(PHON).forEach(([c,w])=>WORD[w.toUpperCase()]=c); NUM.forEach((w,i)=>WORD[w.toUpperCase()]=String(i));
+  Object.assign(WORD, {NINE:"9", XRAY:"X", JULIETT:"J", ALFA:"A"});
+  const words = raw.split(/[\s\-]+/).filter(Boolean); let type = "", chars = "";
+  const known = [...$("m-type").options].map(o=>o.value);
+  words.forEach((w,i)=>{
+    const u = w.toUpperCase().replace(/[^A-Z]/g,"");
+    if(i===0 && !WORD[u]){ type = known.find(k=>k.toUpperCase()===u) || ""; return; }
+    if(WORD[u] !== undefined) chars += WORD[u]; else if(/^[A-Z0-9]$/i.test(w)) chars += w.toUpperCase();
+  });
+  if(chars.startsWith("N")) chars = chars.slice(1);
+  if(!/^[0-9][0-9A-Z]{0,4}$/.test(chars)) return null;
+  return {tail: "N"+chars, type};
 }
 function callsignMissing(text){
   const t = text.toLowerCase(), body = tailBody().toLowerCase();
@@ -514,8 +590,13 @@ function renderLive(st){
   $("lv-dot").classList.toggle("on", !!st.ok);
   if(!st.ok){ $("lv-status").textContent = st.error || "Waiting for SayIntentions…"; return; }
   aiOn = st.ai;
+  if(typeof st.paused === "boolean" && st.paused !== paused){ paused = st.paused; renderPause(); }
+  if(st.mentor){ mentorCount = st.mentor; renderMentor(); }
   const f = st.flight || {}, icao = f.current_airport || f.origin || "";
-  if(f.callsign && f.callsign.toUpperCase() !== me.tail.toUpperCase()){ me.tail = f.callsign; store.set("me", me); renderMe(); }
+  const cs = parseCallsign(f.callsign);
+  if(cs && (cs.tail !== me.tail.toUpperCase() || (cs.type && cs.type !== me.type))){
+    me.tail = cs.tail; if(cs.type) me.type = cs.type; store.set("me", me); renderMe();
+  }
   const wxa = (st.wx && st.wx.airports && st.wx.airports[0]) || {};
   if(icao) liveFreq[icao] = mapComms(st.wx && st.wx.comms, icao);
   const rwy = wxa.active_runway || f.runway || f.dep_runway || "";
@@ -536,7 +617,9 @@ function renderLive(st){
       <div class="hint">${rb?"Say back:":""}</div><div class="rbk">${rb?`"${esc(rb)}"`:"Nothing to read back. Keep flying."}</div><div class="mean hint"></div>`;
     if(navigator.vibrate) navigator.vibrate(90);
     if(aiOn) coachAI(atc, $("lv-atc"));
+    if(liveSeeded) mentorSay(atc, rb);   // never speak a call that was already there when the page opened
   }
+  liveSeeded = true;
   const mine = [...comms].reverse().find(c=>c.outgoing_message);
   if(mine && mine.id !== lastMeId){
     lastMeId = mine.id;

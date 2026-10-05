@@ -22,9 +22,16 @@ APP = Path(__file__).with_name("index.html")
 AI_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 AI_MODEL = os.getenv("COACH_MODEL", "claude-haiku-4-5-20251001")
 
-state = {"ok": False, "error": "Starting...", "flight": {}, "comms": [], "wx": {}, "updated": 0}
+MENTOR_CAP = 30          # SayIntentions asks for "a few dozen" voice generations per flight
+FREQ_MIN, FREQ_MAX = 118.0, 136.975
+
+state = {"ok": False, "error": "Starting...", "flight": {}, "comms": [], "wx": {}, "updated": 0,
+         "paused": False, "mentor": {"used": 0, "cap": MENTOR_CAP}}
 lock = threading.Lock()
 coach_cache = {}
+session = {"api_key": "", "flight_id": ""}   # server-side only, never sent to the phone
+mentor_used = {}                             # flight_id -> count
+mentor_seen = set()                          # comm ids already spoken
 
 
 def get_json(url, timeout=6):
@@ -66,13 +73,74 @@ def poll():
                     wx = sapi("getWX", api_key=key, icao=icao, with_comms=1); wx_at, wx_icao = time.time(), icao
                 except Exception as e:
                     print("[wx]", e)
+            fid = str(cf.get("flight_id") or fd.get("flight_id") or
+                      f"{flight.get('callsign')}-{flight.get('origin')}-{flight.get('destination')}")
             with lock:
-                state.update(ok=True, error="", flight=flight, comms=comms, wx=wx, updated=time.time())
+                session.update(api_key=key, flight_id=fid)
+                state.update(ok=True, error="", flight=flight, comms=comms, wx=wx, updated=time.time(),
+                             mentor={"used": mentor_used.get(fid, 0), "cap": MENTOR_CAP})
         except Exception as e:
             with lock:
                 state.update(ok=False, error="Can't reach SayIntentions on this PC. Is the SayIntentions app open?")
             print("[flight.json]", e)
         time.sleep(4)
+
+
+def sapi_action(endpoint, **params):
+    """Call a SAPI action with the api_key from the latest flight.json."""
+    with lock:
+        key = session["api_key"]
+    if not key:
+        return {"error": "No active SayIntentions flight yet."}
+    try:
+        return sapi(endpoint, api_key=key, **params)
+    except Exception as e:
+        return {"error": f"SayIntentions {endpoint} failed: {e}"}
+
+
+def do_pause(p):
+    v = 1 if str(p.get("value")) in ("1", "true", "True") else 0
+    out = sapi_action("setPause", value=v)
+    if "error" not in out:
+        with lock:
+            state["paused"] = bool(v)
+    return out
+
+
+def do_tune(p):
+    try:
+        f = float(p.get("freq"))
+    except (TypeError, ValueError):
+        return {"error": "That isn't a frequency."}
+    if not FREQ_MIN <= f <= FREQ_MAX:
+        return {"error": f"{p.get('freq')} is outside the airband (118.000-136.975)."}
+    com = 2 if str(p.get("com")) == "2" else 1
+    mode = "active" if p.get("mode") == "active" else "standby"
+    return sapi_action("setFreq", freq=f"{f:.3f}", com=com, mode=mode)
+
+
+def do_mentor(p):
+    msg = str(p.get("message") or "").strip()
+    if not msg:
+        return {"error": "Nothing to say."}
+    msg = msg[:255]
+    cid = p.get("id")
+    with lock:
+        fid = session["flight_id"]
+        used = mentor_used.get(fid, 0)
+        if cid is not None and (fid, str(cid)) in mentor_seen:
+            return {"skipped": "duplicate", "used": used, "cap": MENTOR_CAP}
+        if used >= MENTOR_CAP:
+            return {"error": f"Mentor limit reached ({MENTOR_CAP} this flight).", "used": used, "cap": MENTOR_CAP}
+    out = sapi_action("sayAs", channel="INTERCOM1_IN", rephrase=0, message=msg)
+    if "error" in out:
+        return out
+    with lock:
+        if cid is not None:
+            mentor_seen.add((fid, str(cid)))
+        mentor_used[fid] = mentor_used.get(fid, 0) + 1
+        state["mentor"] = {"used": mentor_used[fid], "cap": MENTOR_CAP}
+        return {**out, "used": mentor_used[fid], "cap": MENTOR_CAP}
 
 
 def coach(payload):
@@ -120,10 +188,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path.startswith("/api/coach"):
+        routes = {"/api/coach": coach, "/api/pause": do_pause, "/api/tune": do_tune, "/api/mentor": do_mentor}
+        fn = routes.get(self.path.split("?")[0])
+        if not fn:
+            return self._send(404, {"error": "not found"})
+        try:
             n = int(self.headers.get("Content-Length", 0))
-            return self._send(200, coach(json.loads(self.rfile.read(n) or b"{}")))
-        self._send(404, {"error": "not found"})
+            payload = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            return self._send(400, {"error": "Bad request."})
+        self._send(200, fn(payload))
 
     def log_message(self, *a):
         pass
