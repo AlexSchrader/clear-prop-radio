@@ -89,6 +89,8 @@ button{cursor:pointer}
 .live .warn{margin-top:8px;color:#c2410c;font-weight:600}
 :root:not([data-theme="light"]) .live .warn{color:#fbbf24}
 .hidden{display:none}
+.banner{margin:8px 0;padding:10px 12px;border-radius:10px;background:var(--soft);border-left:4px solid var(--say);font-size:14px;color:var(--ink)}
+.badge{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--atc);color:var(--atc);font-size:12px;font-weight:600;vertical-align:middle}
 .live .pausebtn{width:100%;margin-top:10px;padding:16px;border-radius:12px;font-weight:700;font-size:18px;border:2px solid var(--btn);background:var(--btn);color:var(--btnText)}
 .live .pausebtn[aria-pressed="true"]{background:transparent;color:var(--ink)}
 .live .mentor{margin-top:8px;font-size:14px;color:var(--dim)}
@@ -155,6 +157,7 @@ button{cursor:pointer}
     <div id="flight" class="hidden">
       <div class="lcd"><span class="freq" id="lcd-freq">—</span><span class="stn" id="lcd-stn"></span></div>
       <div class="progress" id="prog"></div>
+      <div id="fl-banner"></div>
       <div id="card"></div>
       <div class="atisbar">
         <span class="hint">ATIS letter</span><select id="atis"></select>
@@ -215,8 +218,21 @@ const store = {
   get(k, d){ try{ const v = localStorage.getItem("cpr:"+k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
   set(k, v){ try{ localStorage.setItem("cpr:"+k, JSON.stringify(v)); }catch(e){} }
 };
-const BY = new Map(DB.map(r=>[r[0], r]));
-const KNOWN = { KTTA:{name:"Raleigh Exec", app:"125.3", dep:"125.3"}, KRDU:{name:"Raleigh", gnd:"121.9", twr:"127.45"} };
+const BY = new Map(DB.map(r=>[r[0], r]));          // every US airport, embedded
+const BYW = new Map();                                // worldwide medium/large airports, loaded lazily from airports-world.json
+let WORLD = null, worldLoading = null;
+let liveFreq = {}, liveRwy = {}, liveAirports = {};   // filled by the SayIntentions bridge in live mode
+function loadWorld(){
+  if(WORLD) return Promise.resolve(WORLD);
+  if(!worldLoading) worldLoading = fetch("airports-world.json",{cache:"force-cache"}).then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); })
+    .then(rows=>{ WORLD = rows; rows.forEach(r=>BYW.set(r[0], r)); return rows; })
+    .catch(e=>{ worldLoading = null; throw e; });
+  return worldLoading;
+}
+// US idents: FAA codes (K + 3 letters), Alaska/Hawaii/Pacific territories (PA.., PH.., PG.., PJ.., PM.., PW.., PL..), or anything in the embedded DB.
+const regionFromIdent = id => (BY.has(id) || /^K[A-Z]{3}$/.test(id) || /^P[AHGJLMW]/.test(id)) ? "US" : "ICAO";
+const normRwy = r => { const m = String(r||"").trim().toUpperCase().match(/^0?(\d{1,2})([LRCWH])?$/); return m ? m[1].padStart(2,"0")+(m[2]||"") : String(r||"").trim().toUpperCase(); };
+const KNOWN ={ KTTA:{name:"Raleigh Exec", app:"125.3", dep:"125.3"}, KRDU:{name:"Raleigh", gnd:"121.9", twr:"127.45"} };
 let over = store.get("overrides", {});
 let recent = store.get("recent", ["KTTA","KRDU"]);
 let me = store.get("me", {tail:"N123AZ", type:"Cirrus", student:true});
@@ -228,19 +244,38 @@ function spoken(full){
   s = s.replace(/\bat\b.*$/i,"").replace(/\s{2,}/g," ").replace(/[\s\-\/]+$/,"").trim();
   return s || full;
 }
-function apGet(id){
-  const r = BY.get(id); if(!r) return null;
+// A DB row -> airport object. source: "db" (embedded US), "world" (airports-world.json).
+function rowToAp(r, source){
   const fq = {}; (r[4]||"").split("|").filter(Boolean).forEach(x=>fq[x[0]]=x.slice(1));
-  const base = { id:r[0], full:r[1], city:r[2], st:r[3], runways:(r[5]||"").split(" ").filter(Boolean),
-    name: spoken(r[1]),
+  return { id:r[0], full:r[1], city:r[2], st:r[3], runways:(r[5]||"").split(" ").filter(Boolean), activeRwy:"",
+    name: spoken(r[1]), source: source||"db", region: source==="world" ? "ICAO" : "US",
     atis: fq.A||fq.W||"", ctaf: fq.C||fq.U||"", clr: fq.D||"", gnd: fq.G||"", twr: fq.T||"",
     app: fq.P||fq.E||"", dep: fq.E||fq.P||"", park:"the FBO" };
-  return Object.assign(base, KNOWN[id]||{}, over[id]||{});
 }
-function search(q){
+// Layering, lowest to highest: built-in data < SayIntentions live data < the user's own fixes from the Airports tab.
+function applyLive(base, live, user){
+  const a = Object.assign({}, base);
+  const lf = (live && live.freqs) || {}, lr = (live && live.rwy) || {}, u = user || {};
+  for(const k in lf){ if(lf[k]) a[k] = lf[k]; }
+  if(lr.list && lr.list.length){
+    const seen = new Set(), out = [];
+    [...lr.list.map(normRwy), ...(a.runways||[]).map(normRwy)].forEach(r=>{ if(r && !seen.has(r)){ seen.add(r); out.push(r); } });
+    a.runways = out;
+  }
+  if(lr.active) a.activeRwy = normRwy(lr.active);
+  for(const k in u){ if(u[k] !== undefined && u[k] !== "") a[k] = u[k]; }
+  return a;
+}
+function apGet(id){
+  const r = BY.get(id) || BYW.get(id);
+  const base = r ? Object.assign(rowToAp(r, BY.has(id) ? "db" : "world"), KNOWN[id]||{}) : liveAirports[id];
+  if(!base) return null;
+  return applyLive(base, {freqs: liveFreq[id], rwy: liveRwy[id]}, over[id]);
+}
+function searchRows(rows, q){
   q = q.trim().toUpperCase(); if(q.length<2) return [];
   const exact = [], starts = [], rest = [];
-  for(const r of DB){
+  for(const r of rows){
     const id=r[0];
     if(id===q || id==="K"+q){ exact.push(r); continue; }
     if(id.startsWith(q)){ starts.push(r); continue; }
@@ -248,6 +283,14 @@ function search(q){
     if(exact.length+starts.length+rest.length>40) break;
   }
   return [...exact, ...starts, ...rest].slice(0,8);
+}
+const search = q => searchRows(DB, q);
+// US first. Only when nothing in the US matches do we fetch the worldwide file (once, then cached by the service worker).
+async function searchAll(q){
+  const us = searchRows(DB, q);
+  if(us.length || q.trim().length<3) return {list:us, world:false};
+  const rows = await loadWorld();
+  return {list: searchRows(rows, q), world:true};
 }
 const towered = ap => !!(ap.twr && ap.twr.trim());
 
@@ -341,6 +384,7 @@ function renderStep(){
   $("lcd-freq").classList.toggle("tune", LIVE && !!s.f);
   $("lcd-stn").textContent = `${flight.ap.id} ${s.st}`;
   $("prog").innerHTML = steps.map((_,i)=>`<i class="${i<=step?"on":""}"></i>`).join("");
+  $("fl-banner").innerHTML = flight.ap.region==="ICAO" ? ICAO_BANNER : "";
   const atc = s.atc ? `<div class="atc"><div class="who">If ATC says</div><p>"${s.atc.says}"</p><p class="rb">${s.atc.rb.startsWith("Nothing")?s.atc.rb:"You read back: \""+s.atc.rb+"\""}</p></div>` : "";
   $("card").innerHTML = `<div class="card-in">
     <div class="step-title">${step+1}. ${s.t}</div>
@@ -356,8 +400,10 @@ function renderStep(){
 
 function rwOpts(ap){
   const opts = ap.runways.length ? ap.runways : [];
-  $("f-rwy").innerHTML = `<option value="">Not sure yet</option>` + opts.map(r=>`<option>${r}</option>`).join("");
+  $("f-rwy").innerHTML = `<option value="">Not sure yet</option>` + opts.map(r=>`<option value="${esc(r)}">${esc(r)}${r===ap.activeRwy?" · active now":""}</option>`).join("");
+  if(ap.activeRwy) $("f-rwy").value = ap.activeRwy;
 }
+const ICAO_BANNER = `<div class="banner">Outside the US: phraseology differs (e.g. "line up and wait", QNH in hPa). Scripts use US/FAA phrasing.</div>`;
 function freqRows(ap){
   const L = [["ATIS",ap.atis],["CTAF",ap.ctaf],["Clearance",ap.clr],["Ground",ap.gnd],["Tower",ap.twr],["Approach",ap.app]].filter(x=>x[1]);
   return L.length ? `<div class="freqs">${L.map(([k,v])=>`<span>${k}</span><span${LIVE?` class="tune" data-freq="${esc(v)}" role="button"`:""}>${esc(v)}</span>`).join("")}</div>` : `<small>No frequencies listed. Use CTAF 122.9.</small>`;
@@ -366,7 +412,10 @@ function pick(id){
   cur = apGet(id); if(!cur) return;
   recent = [id, ...recent.filter(x=>x!==id)].slice(0,6); store.set("recent", recent);
   $("f-q").value = ""; $("f-res").classList.add("hidden");
-  $("f-card").innerHTML = `<div class="apcard"><b>${cur.id}</b> ${cur.name} <small>${towered(cur)?"Towered":"No tower, CTAF"}</small><br><small>${cur.full}, ${cur.city||""} ${cur.st}</small>${freqRows(cur)}
+  const where = cur.source==="si" ? `<span class="badge">from SayIntentions</span> not in the built-in database`
+    : `${esc(cur.full)}, ${esc(cur.city||"")} ${esc(cur.st)}${cur.source==="world"?` <span class="badge">worldwide data</span>`:""}`;
+  $("f-card").innerHTML = `<div class="apcard"><b>${esc(cur.id)}</b> ${esc(cur.name)} <small>${towered(cur)?"Towered":"No tower, CTAF"}</small><br><small>${where}</small>${freqRows(cur)}
+    ${cur.region==="ICAO" ? ICAO_BANNER : ""}
     <p class="hint" style="margin:8px 0 0">Wrong? <button class="ghost" id="fix">Fix this airport</button></p></div>`;
   $("fix").onclick = ()=>{ document.querySelector('[data-tab="airports"]').click(); openEdit(cur.id); };
   rwOpts(cur); renderFlows(); renderRecent();
@@ -382,8 +431,26 @@ function renderFlows(){
   $("f-flow").innerHTML = fl.map(([k,l])=>`<button class="chip" data-v="${k}" aria-pressed="${k===v}">${l}</button>`).join("");
   $("f-dest-wrap").classList.toggle("hidden", v!=="tdep");
 }
-function resultsHTML(list){
-  return list.map(r=>`<button data-id="${r[0]}"><b>${r[0]}</b> ${r[1]}<br><small>${r[2]||""}, ${r[3]}</small></button>`).join("") || `<button disabled>No match. Try the 4-letter code, like KTTA.</button>`;
+function resultsHTML(list, world){
+  return list.map(r=>`<button data-id="${esc(r[0])}"><b>${esc(r[0])}</b> ${esc(r[1])}<br><small>${esc(r[2]||"")}, ${esc(r[3])}${world?" · worldwide":""}</small></button>`).join("")
+    || `<button disabled>No match. Try the 4-letter code, like KTTA${world?" or EGLL":""}.</button>`;
+}
+// Search box handler shared by the Fly and Airports tabs. US results are instant; a worldwide lookup shows a placeholder while the file loads.
+let searchSeq = 0;
+async function runSearch(inp, res){
+  const q = $(inp).value, mine = ++searchSeq;
+  $(res).classList.toggle("hidden", q.trim().length<2);
+  if(q.trim().length<2) return;
+  const us = searchRows(DB, q);
+  if(us.length || q.trim().length<3){ $(res).innerHTML = resultsHTML(us, false); return; }
+  if(!WORLD) $(res).innerHTML = `<button disabled>No US match. Searching worldwide…</button>`;
+  try{
+    const r = await searchAll(q);
+    if(mine !== searchSeq) return;
+    $(res).innerHTML = resultsHTML(r.list, r.world);
+  }catch(e){
+    if(mine === searchSeq) $(res).innerHTML = `<button disabled>No US match, and the worldwide list couldn't load (offline?).</button>`;
+  }
 }
 function openEdit(id){
   const a = apGet(id); if(!a) return; editId = id;
@@ -406,7 +473,7 @@ document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{
   ["fly","airports","me","ladder"].forEach(t=>$("tab-"+t).classList.toggle("hidden", t!==b.dataset.tab));
   $("dock").classList.toggle("hidden", !(b.dataset.tab==="fly" && flight));
 });
-$("f-q").oninput = ()=>{ const l = search($("f-q").value); $("f-res").innerHTML = resultsHTML(l); $("f-res").classList.toggle("hidden", $("f-q").value.trim().length<2); };
+$("f-q").oninput = ()=>runSearch("f-q","f-res");
 $("f-res").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) pick(b.dataset.id); };
 $("recent").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) pick(b.dataset.id); };
 $("f-flow").onclick = e=>{ const v=e.target.dataset.v; if(!v) return; $("f-flow").dataset.v=v; renderFlows(); };
@@ -433,7 +500,7 @@ $("next").onclick = ()=>{
 $("back").onclick = ()=>{ step--; renderStep(); };
 $("end").onclick = ()=>{ flight=null; $("flight").classList.add("hidden"); $("setup").classList.remove("hidden"); $("dock").classList.add("hidden"); };
 
-$("a-q").oninput = ()=>{ const l = search($("a-q").value); $("a-res").innerHTML = resultsHTML(l); $("a-res").classList.toggle("hidden", $("a-q").value.trim().length<2); };
+$("a-q").oninput = ()=>runSearch("a-q","a-res");
 $("a-res").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) openEdit(b.dataset.id); };
 $("a-save").onclick = ()=>{
   const o = {}; ["name","atis","ctaf","clr","gnd","twr","app","dep","park"].forEach(k=>o[k]=$("a-"+k).value.trim());
@@ -453,7 +520,7 @@ $("ladder").onchange = e=>{ const i=+e.target.dataset.rung; ladderDone = e.targe
 
 /* ===== LIVE: SayIntentions via local bridge ===== */
 const LIVE = location.protocol === "http:";
-let liveFreq = {}, lastAtcId = null, lastMeId = null, liveAp = null, aiOn = false;
+let lastAtcId = null, lastMeId = null, liveAp = null, lastLiveSig = "", aiOn = false;
 let liveSeeded = false, paused = false, mentorOn = store.get("mentor", false), mentorCount = {used:0, cap:30};
 let toastTimer = null;
 function toast(msg, err){
@@ -499,30 +566,45 @@ if(LIVE){
   $("m-mentor").checked = mentorOn;
   $("m-mentor").onchange = ()=>{ mentorOn = $("m-mentor").checked; store.set("mentor", mentorOn); renderMentor(); };
 }
-const _apGet = apGet;
-apGet = function(id){
-  const a = _apGet(id); if(!a) return a;
-  const lf = liveFreq[id] || {};
-  const user = over[id] || {};
-  for(const k in lf){ if(!user[k]) a[k] = lf[k]; }
-  return a;
-};
+// SayIntentions getWX comms -> {atis, ctaf, clr, gnd, twr, app, dep}. Types seen live: ATIS AWOS CTAF CLR GND TWR APP DEP RDR RDO.
+// Primary types win; fallbacks (AWOS for ATIS, radio/info for CTAF, radar for approach) only fill gaps.
+const COMM_TYPES = {ATIS:"atis", CTAF:"ctaf", UNIC:"ctaf", UNICOM:"ctaf", CLR:"clr", CLD:"clr", CLEARANCE:"clr", DELIVERY:"clr", GND:"gnd", GROUND:"gnd",
+  TWR:"twr", TOWER:"twr", APP:"app", APPROACH:"app", DEP:"dep", DEPARTURE:"dep"};
+const COMM_FALLBACK = {AWOS:"atis", ASOS:"atis", RDO:"ctaf", RADIO:"ctaf", AFIS:"ctaf", INFO:"ctaf", ATF:"ctaf", RDR:"app", RADAR:"app"};
 function mapComms(list, icao){
-  const m = {};
+  const m = {}, fb = {};
   (list||[]).forEach(c=>{
     if(c.airport && c.airport !== icao) return;
-    const t = String(c.type||c.callsign||"").toUpperCase(), f = String(c.freq||"").replace(/0+$/,"").replace(/\.$/,"");
-    const set = k=>{ if(!m[k] && f) m[k]=f; };
-    if(t.includes("ATIS")) set("atis");
-    else if(t.includes("CTAF")||t.includes("UNICOM")) set("ctaf");
-    else if(t.includes("CLEARANCE")||t.includes("DELIVERY")) set("clr");
-    else if(t.includes("GROUND")) set("gnd");
-    else if(t.includes("TOWER")) set("twr");
-    else if(t.includes("APPROACH")) { set("app"); }
-    else if(t.includes("DEPARTURE")) { set("dep"); }
+    const t = String(c.type||"").toUpperCase().trim(), f = String(c.freq||"").replace(/(\.\d*?[1-9])0+$/,"$1").replace(/\.0+$/,"");
+    if(!f) return;
+    if(COMM_TYPES[t]){ if(!m[COMM_TYPES[t]]) m[COMM_TYPES[t]] = f; }
+    else if(COMM_FALLBACK[t]){ if(!fb[COMM_FALLBACK[t]]) fb[COMM_FALLBACK[t]] = f; }
   });
+  for(const k in fb){ if(!m[k]) m[k] = fb[k]; }
   if(m.app && !m.dep) m.dep = m.app; if(m.dep && !m.app) m.app = m.dep;
   return m;
+}
+// The spoken station name SayIntentions uses, e.g. "RALEIGH" or "AMPURIABRAVA" -> "Raleigh".
+function commsName(list, icao){
+  const c = (list||[]).find(x=>(!x.airport || x.airport===icao) && x.callsign && String(x.callsign).trim());
+  if(!c) return "";
+  return String(c.callsign).trim().toLowerCase().replace(/\b\w/g, ch=>ch.toUpperCase());
+}
+// getWX runway fields are strings like "17" or "5L,5R,14". GA pilots get the preferred GA runway when SI names one.
+function siRunways(wxa, f){
+  wxa = wxa || {}; f = f || {};
+  const split = s => String(s||"").split(/[,\s]+/).map(normRwy).filter(Boolean);
+  const dep = split(wxa.active_runways_departing), arr = split(wxa.active_runways_arriving);
+  const list = []; [...dep, ...arr, normRwy(f.runway), normRwy(f.dep_runway), normRwy(f.arr_runway)].forEach(r=>{ if(r && !list.includes(r)) list.push(r); });
+  const active = normRwy(wxa.preferred_runway_ga_departing) || dep[0] || normRwy(f.runway) || normRwy(f.dep_runway) || "";
+  return {active, list};
+}
+// An airport object built only from SayIntentions, for fields MSFS loaded that aren't in any of our data.
+function buildLiveAirport(icao, f, wx){
+  const comms = (wx && wx.comms) || [], wxa = ((wx && wx.airports) || []).find(a=>a.airport===icao) || {};
+  const fq = mapComms(comms, icao), rw = siRunways(wxa, f), name = commsName(comms, icao) || icao;
+  return { id:icao, full:name, city:"", st:"", runways:rw.list, activeRwy:rw.active, name, source:"si", region:regionFromIdent(icao),
+    atis:fq.atis||"", ctaf:fq.ctaf||"", clr:fq.clr||"", gnd:fq.gnd||"", twr:fq.twr||"", app:fq.app||"", dep:fq.dep||"", park:"the FBO" };
 }
 function readbackFor(text){
   const T = " " + text.replace(/\s+/g," ") + " ", parts = [];
@@ -597,14 +679,22 @@ function renderLive(st){
   if(cs && (cs.tail !== me.tail.toUpperCase() || (cs.type && cs.type !== me.type))){
     me.tail = cs.tail; if(cs.type) me.type = cs.type; store.set("me", me); renderMe();
   }
-  const wxa = (st.wx && st.wx.airports && st.wx.airports[0]) || {};
-  if(icao) liveFreq[icao] = mapComms(st.wx && st.wx.comms, icao);
-  const rwy = wxa.active_runway || f.runway || f.dep_runway || "";
+  const wxa = ((st.wx && st.wx.airports) || []).find(a=>a.airport===icao) || {};
+  if(icao){
+    liveFreq[icao] = mapComms(st.wx && st.wx.comms, icao);     // SayIntentions' frequencies override the built-in ones
+    liveRwy[icao] = siRunways(wxa, f);                          // and so does its active runway
+    if(!BY.has(icao) && !BYW.has(icao)) liveAirports[icao] = buildLiveAirport(icao, f, st.wx);
+  }
+  const rwy = icao ? liveRwy[icao].active : "";
   $("lv-status").textContent = `Live · ${f.callsign||""} at ${icao||"—"}${rwy?` · runway ${rwy}`:""}${aiOn?" · AI coach on":""}`;
-  if(icao && BY.has(icao) && icao !== liveAp && !flight){
-    liveAp = icao; pick(icao);
-    if(rwy){ if(![...$("f-rwy").options].some(o=>o.value===rwy)) $("f-rwy").insertAdjacentHTML("beforeend", `<option>${rwy}</option>`); $("f-rwy").value = rwy; }
-    if(f.pattern_direction) $("f-pat").value = f.pattern_direction.toLowerCase()==="right"?"right":"left";
+  // Re-pick when the airport changes, or when SI's runway or frequencies change while the pilot is still on the setup screen.
+  const sig = icao ? JSON.stringify([icao, liveFreq[icao], liveRwy[icao], (liveAirports[icao]||{}).name]) : "";
+  if(icao && !flight && (icao !== liveAp || sig !== lastLiveSig)){
+    const fresh = icao !== liveAp;
+    liveAp = icao; lastLiveSig = sig; pick(icao);
+    if(rwy && ![...$("f-rwy").options].some(o=>o.value===rwy)) $("f-rwy").insertAdjacentHTML("beforeend", `<option value="${esc(rwy)}">${esc(rwy)} · active now</option>`);
+    if(rwy) $("f-rwy").value = rwy;
+    if(fresh && f.pattern_direction) $("f-pat").value = f.pattern_direction.toLowerCase()==="right"?"right":"left";
   }
   const letter = (String(wxa.atis||"").match(/information\s+([A-Za-z]+)/i)||[])[1];
   if(letter && flight){ const L = letter[0].toUpperCase()+letter.slice(1).toLowerCase(); if(PHON[L[0]]===L && flight.atis!==L){ flight.atis=L; $("atis").value=L; renderStep(); } }
@@ -639,6 +729,8 @@ if(LIVE){ $("live").classList.remove("hidden"); livePoll(); }
 
 renderMe(); renderRecent(); renderLadder();
 if(recent[0]) pick(recent[0]);
+// Offline support on GitHub Pages: cache the page and the worldwide airport file. Browsers only allow this over https.
+if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
 </html>

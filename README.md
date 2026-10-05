@@ -15,6 +15,20 @@ Your phone shows what ATC just said and **exactly what to read back**, pulled li
 3. It prints an address like `http://192.168.1.23:8765`. Open that on your phone (same Wi-Fi).
 4. If Windows Firewall pops up, allow **Private networks**.
 
+## Any airport, anywhere
+- **Every US airport** is built in. Search by code, name, or city.
+- **Worldwide**: if nothing in the US matches, the app fetches a worldwide list of medium and large airports
+  (about 330 KB, once) and searches that. EGLL, RJTT, LFPG all work. On GitHub Pages it's cached for offline use.
+- **Live mode works at any field MSFS loads**, even ones in no list. The airport card is then built from
+  SayIntentions' own data (name, frequencies, active runway) and marked "from SayIntentions".
+- In live mode, SayIntentions' active runway and frequencies always win over the built-in data, and your own fixes
+  from the Airports tab win over both.
+- Outside the US you'll see a banner: phraseology differs (e.g. "line up and wait", QNH in hPa). The scripts still
+  use US/FAA phrasing for now.
+
+To rebuild the data from OurAirports: `python tools/build_airports.py` (add `--update-index` to refresh the US list
+embedded in index.html).
+
 ## Live features
 These only show up on the phone page served by `bridge.py`. The GitHub Pages copy is the offline trainer.
 - **Pause / Resume**: a big button in the Live panel pauses the sim through SayIntentions.

@@ -19,6 +19,8 @@ PORT = 8765
 FLIGHT_URL = "http://localhost:63287/flightJSON"
 SAPI = "https://apipri.sayintentions.ai/sapi/"
 APP = Path(__file__).with_name("index.html")
+STATIC = {"/airports-world.json": "application/json; charset=utf-8",   # worldwide airports, loaded lazily by the page
+          "/sw.js": "application/javascript; charset=utf-8"}
 AI_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 AI_MODEL = os.getenv("COACH_MODEL", "claude-haiku-4-5-20251001")
 
@@ -182,6 +184,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             return self._send(200, APP.read_bytes(), "text/html; charset=utf-8")
+        p = self.path.split("?")[0]
+        if p in STATIC:
+            f = APP.with_name(p[1:])
+            if not f.exists():
+                return self._send(404, {"error": f"{p[1:]} is missing next to bridge.py"})
+            return self._send(200, f.read_bytes(), STATIC[p])
         if self.path.startswith("/api/state"):
             with lock:
                 return self._send(200, {**state, "ai": bool(AI_KEY)})

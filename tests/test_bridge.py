@@ -49,3 +49,11 @@ for i in range(28): post("/api/mentor", {"id": f"x{i}", "message": "hi"})
 ok(get("/api/state")["mentor"] == {"used": 30, "cap": 30}, "state shows 30/30")
 n = len(calls); r = post("/api/mentor", {"id": "over", "message": "hi"}); ok("error" in r and len(calls) == n, "31st blocked, no SAPI call")
 ok("error" in post("/api/mentor", {"id": "e", "message": ""}), "empty message -> error")
+r = urllib.request.urlopen(f"http://127.0.0.1:{ap}/airports-world.json")
+ok(r.status == 200 and r.headers["Content-Type"].startswith("application/json") and r.read(2) == b"[[", "bridge serves airports-world.json")
+r = urllib.request.urlopen(f"http://127.0.0.1:{ap}/sw.js")
+ok(r.status == 200 and "javascript" in r.headers["Content-Type"] and b"cpr-v" in r.read(), "bridge serves sw.js")
+try:
+    urllib.request.urlopen(f"http://127.0.0.1:{ap}/bridge.py"); ok(False, "bridge.py not served")
+except urllib.error.HTTPError as e:
+    ok(e.code == 404, "bridge.py not served (404)")
