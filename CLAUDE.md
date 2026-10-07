@@ -100,6 +100,18 @@ unless `toManual`, auto-fills To from `flight.destination`, switching the flow c
   is added to the dropdown marked "active now"; the setup card re-picks when SI's runway or frequencies change (not
   once a script has started). Worldwide offline search via `airports-world.json`. Non-US phraseology banner.
 
+## Easier reads (Me tab, localStorage `cpr:reads`, defaults words:on chunks:on big:off)
+- **Numbers as words**: `sayNums()` rewrites what the *pilot* says (call lines, readbacks, live readbacks) into spoken
+  form: runways via `rwySay`, frequencies "one two one point niner", altitudes via `altWords` (2,500 → "two thousand
+  five hundred", 10,000 → "one zero thousand"), squawk/heading digit by digit, "N miles", taxiway lists after
+  "via"/"at" → phonetic, "Class C" → "Class Charlie". It is **never** applied to `atc.says` (that's what you hear) or
+  to the Mentor `sayAs` message (SI's TTS handles digits; 255-char cap).
+- **Chunked readbacks**: `chunks()` splits a readback on commas but keeps "F, E, A" taxiway lists together; `rbHTML()`
+  renders 3+ items as `<ol class="rb-list">` with the callsign last (`li.cs`), otherwise a quoted sentence.
+- **Cockpit text**: `reads.big` sets `data-big` on `<html>`; CSS bumps sizes/contrast, hides h1/sub/coach tip, and
+  `renderStep` folds the "what to do" note into `<details>`. Toggle in Me tab or the "Aa" button in the flight bar.
+Tests in tests/test_ui.js cover sayNums (13 cases incl. "the 45" left alone), chunks, and rbHTML escaping.
+
 ## readbackFor() test cases (in tests/test_ui.js)
 | ATC says | Readback (callsign = Cirrus Three Alpha Zulu) |
 |---|---|
@@ -127,6 +139,7 @@ unless `toManual`, auto-fills To from `flight.destination`, switching the flow c
 - (c) worldwide search: EGLL and RJTT by ident and by name ("heathrow", "haneda"); LEAP is *absent* (non-US small_airport), which is what the live fallback is for; no US rows.
 
 ## Backlog
+- "Read it to me": phone text-to-speech of the call at a slow pace (offered, not chosen yet).
 - ICAO phraseology variants of the scripts ("line up and wait", QNH/hPa, "taxi to holding point", conditional
   clearances). Today non-US airports only get the banner.
 - Single-airport *arrival* flows (`tarr`/`uarr` chosen on the From airport) still use the departing-runway logic for

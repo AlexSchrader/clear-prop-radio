@@ -111,6 +111,27 @@ button{cursor:pointer}
 .freqs{display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;margin-top:6px;font-variant-numeric:tabular-nums}
 .recent{display:flex;gap:6px;flex-wrap:wrap;margin:-4px 0 12px}
 .recent button{padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;font-size:14px}
+/* readbacks as a list */
+.rb-list{margin:6px 0 0;padding-left:26px;font-weight:600;color:var(--say)}
+.rb-list li{margin:3px 0;line-height:1.3}
+.rb-list li.cs{color:var(--dim);font-weight:500}
+.atc .rb-list{font-size:17px}
+.live .rb-list{font-size:22px}
+details.do summary{cursor:pointer;font-weight:600}
+/* Cockpit text: bigger, higher contrast, less on screen */
+html[data-big]{--say:#8A4B00;--dim:#3F5466;--atc:#155C8A}
+@media (prefers-color-scheme: dark){ html[data-big]:not([data-theme="light"]){--say:#FFC66B;--dim:#B3C5D3;--ink:#F4F8FB;--atc:#9AD6FF} }
+html[data-big][data-theme="dark"]{--say:#FFC66B;--dim:#B3C5D3;--ink:#F4F8FB;--atc:#9AD6FF}
+html[data-big] body{font-size:19px}
+html[data-big] .sub,html[data-big] .live .mean,html[data-big] .atisbar>.hint,html[data-big] .wrap>h1{display:none}
+html[data-big] .step-title{font-size:24px}
+html[data-big] .say{font-size:34px;line-height:1.25}
+html[data-big] .atc p{font-size:19px}
+html[data-big] .atc .rb,html[data-big] .atc .rb-list,html[data-big] .live .rbk,html[data-big] .live .rb-list{font-size:30px;line-height:1.3}
+html[data-big] .live .heard{font-size:18px}
+html[data-big] .lcd .freq{font-size:52px}
+html[data-big] .dock button{padding:20px;font-size:20px}
+html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--btn);color:var(--btnText);border-color:var(--btn)}
 @media (prefers-reduced-motion:no-preference){.card-in{animation:in .18s ease-out}@keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}}
 </style>
 </head>
@@ -171,6 +192,7 @@ button{cursor:pointer}
       <div id="card"></div>
       <div class="atisbar">
         <span class="hint" id="atis-for">ATIS letter</span><select id="atis"></select>
+        <button class="ghost" id="bigbtn" aria-pressed="false" title="Cockpit text">Aa</button>
         <button class="ghost" id="end">End flight</button>
       </div>
     </div>
@@ -205,6 +227,12 @@ button{cursor:pointer}
     <div class="field"><label for="m-type">Aircraft (how you say it)</label>
       <select id="m-type"><option>Cirrus</option><option>Diamond</option><option>Cessna</option><option>Skyhawk</option><option>Piper</option></select></div>
     <div class="ladder"><label><input type="checkbox" id="m-student"><span><b>Say "student pilot" on first contact</b><br><span class="hint">Controllers slow down and give you more room.</span></span></label></div>
+    <h2>Easier reads</h2>
+    <div class="ladder">
+      <label><input type="checkbox" id="m-words"><span><b>Numbers as words</b><br><span class="hint">"121.9" shows as "one two one point niner", so you read exactly what you say.</span></span></label>
+      <label><input type="checkbox" id="m-chunks"><span><b>Chunked readbacks</b><br><span class="hint">One line per item: runway, taxiways, hold short, callsign.</span></span></label>
+      <label><input type="checkbox" id="m-big"><span><b>Cockpit text</b><br><span class="hint">Bigger, higher contrast, details folded away. The "Aa" button during a flight does the same.</span></span></label>
+    </div>
     <div class="ladder hidden" id="m-mentor-wrap"><label><input type="checkbox" id="m-mentor"><span><b>Mentor mode: co-pilot says the readback out loud</b><br><span class="hint">Live only. Uses SayIntentions voice, up to 30 times per flight.</span></span></label></div>
     <p class="hint" id="m-preview"></p>
   </section>
@@ -250,6 +278,7 @@ let toAp = null, toManual = false;             // destination picked on the setu
 let recent = store.get("recent", ["KTTA","KRDU"]);
 let me = store.get("me", {tail:"N123AZ", type:"Cirrus", student:true});
 let ladderDone = store.get("ladder", []);
+let reads = Object.assign({words:true, chunks:true, big:false}, store.get("reads", {}));   // "easier reads" settings
 let cur = null, flight = null, step = 0, editId = null;
 
 function spoken(full){
@@ -326,6 +355,54 @@ const rwySay = r => {
   const side = {L:" left",R:" right",C:" center"}[m[2]] || "";
   return m[1].split("").map(d => NUM[+d].toLowerCase()).join(" ") + side;
 };
+/* ===== Easier reads: numbers as words, chunked readbacks ===== */
+const spellDigits = s => String(s).split("").map(d=>NUM[+d].toLowerCase()).join(" ");
+// Altitudes the way they're said: 2,500 -> "two thousand five hundred", 10,000 -> "one zero thousand". Odd values fall back to digits.
+function altWords(n){
+  if(n < 1000 || n % 100) return spellDigits(n);
+  const th = Math.floor(n/1000), hu = Math.floor((n%1000)/100);
+  let out = th ? `${th >= 10 ? spellDigits(th) : NUM[th].toLowerCase()} thousand` : "";
+  if(hu) out += ` ${NUM[hu].toLowerCase()} hundred`;
+  return out.trim();
+}
+const phonetic = s => s.split("").map(c => /\d/.test(c) ? NUM[+c].toLowerCase() : (PHON[c] || c)).join(" ");
+// Turn the numbers in something the PILOT says into the words they'd say. Never applied to what ATC says: that's what you hear.
+function sayNums(t){
+  if(!reads.words || !t) return t;
+  return t
+    .replace(/\brunway (\d{1,2}[LRC]?)\b/gi, (m,r)=>`runway ${rwySay(r)}`)
+    .replace(/\bClass ([A-E])\b/g, (m,c)=>`Class ${PHON[c]}`)
+    .replace(/\b(1[0-3]\d)\.(\d{1,3})\b/g, (m,a,b)=>`${spellDigits(a)} point ${spellDigits(b)}`)
+    .replace(/\bsquawk (\d{4})\b/gi, (m,s)=>`squawk ${spellDigits(s)}`)
+    .replace(/\bheading (\d{3})\b/gi, (m,h)=>`heading ${spellDigits(h)}`)
+    .replace(/\b(\d{1,2}),(\d{3})\b/g, (m,a,b)=>altWords(+(a+b)))
+    .replace(/\b([1-9]\d{3})\b/g, (m,n)=> +n % 100 ? m : altWords(+n))
+    .replace(/\b(\d{1,2}) miles\b/gi, (m,n)=>`${spellDigits(n)} miles`)
+    .replace(/\b(via|at) ([A-Z]\d?(?:,\s*[A-Z]\d?)*)\b/g, (m,w,list)=>`${w} ${list.split(/,\s*/).map(phonetic).join(", ")}`);
+}
+// Split a readback into the items you read back, keeping a taxiway list ("F, E, A") on one line.
+function chunks(rb){
+  const out = [];
+  String(rb||"").trim().replace(/\.$/,"").split(/,\s*/).forEach(p=>{
+    p = p.trim(); if(!p) return;
+    if(out.length && /^[A-Z]\d?$/.test(p)) out[out.length-1] += ", " + p; else out.push(p);
+  });
+  return out;
+}
+function rbHTML(rb){
+  if(!rb) return "";
+  const items = chunks(rb).map(sayNums).map(esc);
+  if(items.length) items[0] = items[0].charAt(0).toUpperCase() + items[0].slice(1);
+  if(!reads.chunks || items.length < 3) return `"${items.join(", ")}."`;
+  return `<ol class="rb-list">${items.map((x,i)=>`<li${i===items.length-1?' class="cs"':''}>${x}</li>`).join("")}</ol>`;
+}
+function applyReads(){
+  document.documentElement.toggleAttribute("data-big", !!reads.big);
+  ["words","chunks","big"].forEach(k=>{ const el = $("m-"+k); if(el) el.checked = !!reads[k]; });
+  const b = $("bigbtn"); if(b) b.setAttribute("aria-pressed", !!reads.big);
+}
+function setReads(patch){ reads = Object.assign({}, reads, patch); store.set("reads", reads); applyReads(); if(flight) renderStep(); }
+
 const flows = ap => towered(ap)
   ? [["tdep","Depart (tower)"],["tarr","Arrive (tower)"]]
   : [["pattern","Pattern laps"],["udep","Depart"],["uarr","Arrive"]];
@@ -430,12 +507,13 @@ function renderStep(){
   $("fl-banner").innerHTML = (stepAp && stepAp.region==="ICAO") ? ICAO_BANNER : "";
   $("atis").value = (flight.atis||[])[s.leg||0] || "";
   $("atis-for").textContent = flight.to ? `${s.ap||flight.ap.id} ATIS letter` : "ATIS letter";
-  const atc = s.atc ? `<div class="atc"><div class="who">If ATC says</div><p>"${s.atc.says}"</p><p class="rb">${s.atc.rb.startsWith("Nothing")?s.atc.rb:"You read back: \""+s.atc.rb+"\""}</p></div>` : "";
+  const atc = s.atc ? `<div class="atc"><div class="who">If ATC says</div><p>"${esc(s.atc.says)}"</p><div class="rb">${s.atc.rb.startsWith("Nothing") ? esc(s.atc.rb) : "You read back: " + rbHTML(s.atc.rb)}</div></div>` : "";
+  const doBlock = !s.do ? "" : reads.big ? `<details class="do"><summary>What to do</summary><p>${esc(s.do)}</p></details>` : `<div class="do">${esc(s.do)}</div>`;
   $("card").innerHTML = `<div class="card-in">
-    <div class="step-title">${step+1}. ${s.t}</div>
-    ${s.say ? `<p class="say">"${s.say}"</p>` : `<p class="say none">Nothing to say yet. Listen.</p>`}
+    <div class="step-title">${step+1}. ${esc(s.t)}</div>
+    ${s.say ? `<p class="say">"${esc(sayNums(s.say))}"</p>` : `<p class="say none">Nothing to say yet. Listen.</p>`}
     ${atc}
-    ${s.do ? `<div class="do">${s.do}</div>` : ""}</div>`;
+    ${doBlock}</div>`;
   $("back").disabled = step===0;
   const last = step===steps.length-1;
   if(flight.flow==="pattern" && last){ $("next").textContent = flight.last ? "Done" : "Another lap"; }
@@ -609,6 +687,8 @@ $("a-reset").onclick = ()=>{
   store.set("me",me); renderMe();
 });
 $("m-type").onchange = $("m-type").oninput; $("m-student").onchange = $("m-student").oninput;
+["words","chunks","big"].forEach(k=>$("m-"+k).onchange = ()=>setReads({[k]: $("m-"+k).checked}));
+$("bigbtn").onclick = ()=>setReads({big: !reads.big});
 $("ladder").onchange = e=>{ const i=+e.target.dataset.rung; ladderDone = e.target.checked ? [...new Set([...ladderDone,i])] : ladderDone.filter(x=>x!==i); store.set("ladder",ladderDone); };
 
 
@@ -763,7 +843,7 @@ async function coachAI(entry, card){
       id:String(entry.id), atc_said:entry.incoming_message, station:entry.station_name, pilot_said_before:entry.outgoing_message||"",
       callsign_full:fullCS(), callsign_short:shortCS()})});
     const c = await r.json(); if(c.error) return;
-    if(c.readback !== undefined) card.querySelector(".rbk").textContent = c.readback ? `"${c.readback}"` : "Nothing to read back. Keep flying.";
+    if(c.readback !== undefined) card.querySelector(".rbk").innerHTML = c.readback ? rbHTML(c.readback) : "Nothing to read back. Keep flying.";
     card.querySelector(".mean").textContent = [c.meaning, c.tip].filter(Boolean).join(" · ");
   }catch(e){}
 }
@@ -818,7 +898,7 @@ function renderLive(st){
     lastAtcId = atc.id;
     const rb = readbackFor(atc.incoming_message);
     $("lv-atc").innerHTML = `<div class="heard"><b>${esc(atc.station_name||"ATC")}${atc.frequency?` (${esc(atc.frequency)})`:""}:</b> “${esc(atc.incoming_message)}”</div>
-      <div class="hint">${rb?"Say back:":""}</div><div class="rbk">${rb?`"${esc(rb)}"`:"Nothing to read back. Keep flying."}</div><div class="mean hint"></div>`;
+      <div class="hint">${rb?"Say back:":""}</div><div class="rbk">${rb ? rbHTML(rb) : "Nothing to read back. Keep flying."}</div><div class="mean hint"></div>`;
     if(navigator.vibrate) navigator.vibrate(90);
     if(aiOn) coachAI(atc, $("lv-atc"));
     if(liveSeeded) mentorSay(atc, rb);   // never speak a call that was already there when the page opened
@@ -841,7 +921,7 @@ async function livePoll(){
 }
 if(LIVE){ $("live").classList.remove("hidden"); livePoll(); }
 
-renderMe(); renderRecent(); renderLadder();
+renderMe(); renderRecent(); renderLadder(); applyReads();
 if(recent[0]) pick(recent[0]);
 // Offline support on GitHub Pages: cache the page and the worldwide airport file. Browsers only allow this over https.
 if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(()=>{});

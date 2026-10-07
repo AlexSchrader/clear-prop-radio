@@ -15,6 +15,12 @@ Your phone shows what ATC just said and **exactly what to read back**, pulled li
 3. It prints an address like `http://192.168.1.23:8765`. Open that on your phone (same Wi-Fi).
 4. If Windows Firewall pops up, allow **Private networks**.
 
+## Easier reads (Me tab)
+- **Numbers as words**: "121.9" shows as "one two one point niner", "2,500" as "two thousand five hundred", taxiways
+  as "Foxtrot, Echo, Alpha". What ATC says stays in digits, because that's what you hear.
+- **Chunked readbacks**: one line per item (runway, taxiways, hold short, callsign) instead of one long sentence.
+- **Cockpit text**: bigger, higher-contrast text with the notes folded away. Tap "Aa" during a flight to toggle it.
+
 ## Fly a whole trip
 Pick **From**, choose Depart, then pick **To**. The script runs the departure, an en-route step that tunes the
 destination's weather, then the arrival there (tower or CTAF, picked automatically), with the radio display switching

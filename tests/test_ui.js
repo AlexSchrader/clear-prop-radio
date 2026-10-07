@@ -166,4 +166,34 @@ eq(customToAp("XYZ1", {}).name, "XYZ1", "custom: no name -> ident");
 eq(applyLive(c, null, {ctaf:"122.4", runways:["17","35"]}).runways.join(" "), "17 35", "custom: user runways apply");
 eq(looksLikeIdent("leap"), true, "custom: 'leap' offered as new airport");
 eq(looksLikeIdent("heathrow"), false, "custom: a word is not an ident");
+
+// ---- easier reads: numbers as words, chunked readbacks ----
+var reads = {words:true, chunks:true, big:false};
+eval(js.match(/const spellDigits = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const phonetic = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const esc = [^\n]+/)[0].replace("const ","var "));
+eval(grab("altWords")); eval(grab("sayNums")); eval(grab("chunks")); eval(grab("rbHTML"));
+eq(sayNums("departure 125.3, squawk 4521"), "departure one two five point three, squawk four five two one", "words: frequency and squawk");
+eq(sayNums("at or below 2,500"), "at or below two thousand five hundred", "words: altitude with comma");
+eq(sayNums("climb and maintain 3500"), "climb and maintain three thousand five hundred", "words: altitude without comma");
+eq(sayNums("maintain 10,000"), "maintain one zero thousand", "words: ten thousand FAA style");
+eq(sayNums("requesting 3,000"), "requesting three thousand", "words: round thousand");
+eq(sayNums("Runway 5R, taxi via F, E, A, hold short runway 5R"), "runway five right, taxi via Foxtrot, Echo, Alpha, hold short runway five right", "words: runways and taxiways");
+eq(sayNums("Ramp via A, F"), "Ramp via Alpha, Foxtrot", "words: via list");
+eq(sayNums("heading 270"), "heading two seven zero", "words: heading");
+eq(sayNums("10 miles south, inbound"), "one zero miles south, inbound", "words: miles");
+eq(sayNums("Cleared out of the Class C"), "Cleared out of the Class Charlie", "words: Class Charlie");
+eq(sayNums("will enter the 45 for left downwind"), "will enter the 45 for left downwind", "words: the 45 entry is left alone");
+eq(sayNums("Cirrus Three Alpha Zulu"), "Cirrus Three Alpha Zulu", "words: callsign untouched");
+eq(sayNums("tower 118.3"), "tower one one eight point three", "words: 118.3");
+reads.words = false; eq(sayNums("departure 125.3"), "departure 125.3", "words: off leaves digits"); reads.words = true;
+eq(JSON.stringify(chunks("Runway 5R, taxi via F, E, A, hold short runway 5R, Cirrus Three Alpha Zulu.")),
+   '["Runway 5R","taxi via F, E, A","hold short runway 5R","Cirrus Three Alpha Zulu"]', "chunks: taxiways stay together, period dropped");
+eq(chunks("Squawk VFR, Cirrus Three Alpha Zulu.").length, 2, "chunks: short readback");
+const html1 = rbHTML("Runway 5R, taxi via F, E, A, hold short runway 5R, Cirrus Three Alpha Zulu.");
+eq(html1.startsWith("<ol class=\"rb-list\">") && (html1.match(/<li/g)||[]).length === 4 && html1.includes('<li class="cs">Cirrus'), true, "rbHTML: list of 4 with callsign last");
+eq(html1.includes("taxi via Foxtrot, Echo, Alpha") && html1.includes("<li>Runway five right</li>"), true, "rbHTML: items are worded, first one capitalized");
+eq(rbHTML("Squawk VFR, Cirrus Three Alpha Zulu."), '"Squawk VFR, Cirrus Three Alpha Zulu."', "rbHTML: under 3 items stays a sentence");
+reads.chunks = false; eq(rbHTML("Runway 5R, taxi via F, E, A, hold short runway 5R, Cirrus Three Alpha Zulu.").startsWith('"Runway five right, taxi via Foxtrot'), true, "rbHTML: chunks off -> one worded, capitalized sentence"); reads.chunks = true;
+eq(rbHTML('<b>x</b>, y, z'), '<ol class="rb-list"><li>&lt;b&gt;x&lt;/b&gt;</li><li>y</li><li class="cs">z</li></ol>', "rbHTML: escapes HTML");
 process.exit(fails?1:0);
