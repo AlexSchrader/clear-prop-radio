@@ -149,6 +149,7 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
   <section id="tab-fly">
     <div class="live hidden" id="live">
       <div class="top"><span class="dot" id="lv-dot"></span><span id="lv-status">Connecting to SayIntentions…</span></div>
+      <div class="hint" id="lv-wx"></div>
       <div id="lv-atc"></div>
       <div id="lv-me"></div>
       <div class="mentor hidden" id="lv-mentor"></div>
@@ -291,6 +292,7 @@ function rowToAp(r, source){
   const fq = {}; (r[4]||"").split("|").filter(Boolean).forEach(x=>fq[x[0]]=x.slice(1));
   return { id:r[0], full:r[1], city:r[2], st:r[3], runways:(r[5]||"").split(" ").filter(Boolean), activeRwy:"",
     name: spoken(r[1]), source: source||"db", region: source==="world" ? "ICAO" : "US",
+    wx: fq.A ? "atis" : fq.W ? "awos" : "none",      // what kind of weather broadcast exists: only "atis" has an information letter
     atis: fq.A||fq.W||"", ctaf: fq.C||fq.U||"", clr: fq.D||"", gnd: fq.G||"", twr: fq.T||"",
     app: fq.P||fq.E||"", dep: fq.E||fq.P||"", park:"the FBO" };
 }
@@ -312,7 +314,7 @@ function applyLive(base, live, user){
 function customToAp(id, c){
   const full = (c && c.full) || id;
   return { id, full, city:"", st:"", runways:[], activeRwy:"", name: full===id ? id : spoken(full), source:"custom", region:regionFromIdent(id),
-    atis:"", ctaf:"", clr:"", gnd:"", twr:"", app:"", dep:"", park:"the FBO" };
+    wx:"none", atis:"", ctaf:"", clr:"", gnd:"", twr:"", app:"", dep:"", park:"the FBO" };
 }
 const looksLikeIdent = q => /^[A-Z0-9]{3,4}$/.test(q.trim().toUpperCase());
 function apGet(id){
@@ -407,6 +409,8 @@ const flows = ap => towered(ap)
   ? [["tdep","Depart (tower)"],["tarr","Arrive (tower)"]]
   : [["pattern","Pattern laps"],["udep","Depart"],["uarr","Arrive"]];
 const DEPARTS = f => f==="tdep" || f==="udep";
+// "with information Bravo" only exists where there's ATIS. AWOS/ASOS fields: "with the weather". Fields with neither: say nothing about it.
+const wxPhrase = (ap, letter) => ap.wx==="atis" ? (letter ? `with information ${letter}` : "with information [letter]") : ap.wx==="awos" ? "with the weather" : "";
 const OPP = {north:"south", northeast:"southwest", east:"west", southeast:"northwest", south:"north", southwest:"northeast", west:"east", northwest:"southeast"};
 // A flight is one leg (what the app always did) or two: depart From, fly en route, arrive at To.
 function legs(f){
@@ -429,12 +433,17 @@ function build(f){
 }
 function buildLeg(f){
   const ap = f.ap, R = rwySay(f.rwy), P = f.pat, nm = ap.name, D = f.dir;
-  const atis = f.atis ? `with information ${f.atis}` : "with information [letter]";
+  // The weather phrase on first contact depends on what the field broadcasts: ATIS has a letter, AWOS/ASOS doesn't, some fields have neither.
+  const wxp = wxPhrase(ap, f.atis), wxc = wxp ? `, ${wxp}` : "";
   const stu = me.student ? ", student pilot" : "";
   const F = fullCS(), S = shortCS(), T = `${nm} traffic`;
   const s = [];
-  const atisStep = {t:"Get the weather", f:ap.atis, st:"ATIS", say:"",
-    do:"Listen for the information letter, wind, runway, and altimeter. Set the altimeter. Pick the letter below."};
+  const atisStep = ap.wx==="atis" ? {t:"Get the weather", f:ap.atis, st:"ATIS", say:"",
+      do:"Listen for the information letter, wind, runway, and altimeter. Set the altimeter. Pick the letter below."}
+    : ap.wx==="awos" ? {t:"Get the weather (AWOS)", f:ap.atis, st:"AWOS", say:"",
+      do:"This field has an automated weather broadcast, not ATIS, so there is no information letter. Listen for wind and altimeter, set the altimeter, and say \"with the weather\" on your first call."}
+    : {t:"Get the weather", f:ap.twr||ap.ctaf||"", st:ap.twr?"Tower":"CTAF", say:"",
+      do:"No ATIS or AWOS at this field, so there is no information letter and nothing to say about it. Listen to the frequency for a minute, note the runway in use, and set the altimeter from the METAR (in live mode the weather line at the top shows it)."};
   if(f.flow==="pattern"||f.flow==="udep"||f.flow==="uarr"){
     const cf = ap.ctaf || "122.9";
     if(f.flow!=="uarr"){
@@ -460,12 +469,12 @@ function buildLeg(f){
   }
   if(f.flow==="tdep"){
     s.push(atisStep);
-    s.push({t:"Ask to leave", f:ap.clr||ap.gnd, st:ap.clr?"Clearance":"Ground", say:`${nm} ${ap.clr?"Clearance":"Ground"}, ${F}${stu}, VFR to ${f.dest||"[destination]"}, requesting ${f.alt||"[altitude]"}, ${atis}.`,
+    s.push({t:"Ask to leave", f:ap.clr||ap.gnd||ap.twr, st:ap.clr?"Clearance":ap.gnd?"Ground":"Tower", say:`${nm} ${ap.clr?"Clearance":ap.gnd?"Ground":"Tower"}, ${F}${stu}, VFR to ${f.dest||"[destination]"}, requesting ${f.alt||"[altitude]"}${wxc}.`,
       atc:{says:"Cleared out of the Class C to the "+D+", maintain at or below 2,500, departure 125.3, squawk 4521.", rb:`…at or below 2,500, departure 125.3, squawk 4521, ${S}.`},
       do:"Write down the numbers they give you. Set the squawk. If they say the weather is too low, ask for Special VFR."});
-    s.push({t:"Taxi", f:ap.gnd, st:"Ground", say:`${nm} Ground, ${F}${stu}, at ${ap.park}, ${atis}, ready to taxi.`,
+    s.push({t:"Taxi", f:ap.gnd||ap.twr, st:ap.gnd?"Ground":"Tower", say:`${nm} ${ap.gnd?"Ground":"Tower"}, ${F}${stu}, at ${ap.park}${wxc}, ready to taxi.`,
       atc:{says:`Runway ${f.rwy||"5R"}, taxi via F, E, A, hold short runway ${f.rwy||"5R"}.`, rb:`Runway ${R}, taxi via F, E, A, hold short runway ${R}, ${S}.`},
-      do:"Read back the runway, every taxiway, and the hold short. Taxi slowly."});
+      do:`Read back the runway, every taxiway, and the hold short. The taxiways above are only an example: use the ones ${LIVE?"ATC gives you (they appear in the Live panel, and SayIntentions draws the route on the ground)":"ATC gives you"}. Taxi slowly.`});
     s.push({t:"Ready at the runway", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}, holding short runway ${R}, ready for departure.`,
       atc:{says:`Runway ${f.rwy||"5R"}, wind 050 at 10, cleared for takeoff.`, rb:`Cleared for takeoff runway ${R}, ${S}.`},
       do:"Stop before the yellow lines. Do the run-up before this call."});
@@ -478,10 +487,10 @@ function buildLeg(f){
   }
   if(f.flow==="tarr"){
     s.push({...atisStep, do:"About 25 miles out. Note the letter and pick it below."});
-    s.push({t:"Call Approach", f:ap.app, st:"Approach", say:`${nm} Approach, ${F}${stu}, ${"[__]"} miles ${D}, ${f.alt||"[altitude]"}, inbound for landing, ${atis}.`,
+    s.push({t:"Call Approach", f:ap.app, st:"Approach", say:`${nm} Approach, ${F}${stu}, ${"[__]"} miles ${D}, ${f.alt||"[altitude]"}, inbound for landing${wxc}.`,
       atc:{says:"Squawk 4521, maintain VFR.", rb:`Squawk 4521, ${S}.`},
       do:"About 20 miles out, before their airspace. Don't enter until they say your callsign back."});
-    s.push({t:"Handoff to Tower", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}, ${f.alt||"[altitude]"}, inbound for landing, ${atis}.`,
+    s.push({t:"Handoff to Tower", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}, ${f.alt||"[altitude]"}, inbound for landing${wxc}.`,
       atc:{says:`Enter ${P} downwind runway ${f.rwy||"5R"}, report midfield.`, rb:`${P} downwind runway ${R}, report midfield, ${S}.`},
       do:`When Approach says "contact tower", read back the frequency, switch, then make this call.`});
     s.push({t:"Landing", f:ap.twr, st:"Tower", say:"",
@@ -506,7 +515,9 @@ function renderStep(){
   const stepAp = s.leg ? flight.to : flight.ap;
   $("fl-banner").innerHTML = (stepAp && stepAp.region==="ICAO") ? ICAO_BANNER : "";
   $("atis").value = (flight.atis||[])[s.leg||0] || "";
-  $("atis-for").textContent = flight.to ? `${s.ap||flight.ap.id} ATIS letter` : "ATIS letter";
+  const hasLetter = stepAp && stepAp.wx==="atis";
+  $("atis").classList.toggle("hidden", !hasLetter);
+  $("atis-for").textContent = hasLetter ? (flight.to ? `${s.ap||flight.ap.id} ATIS letter` : "ATIS letter") : `No ATIS letter at ${s.ap||flight.ap.id}`;
   const atc = s.atc ? `<div class="atc"><div class="who">If ATC says</div><p>"${esc(s.atc.says)}"</p><div class="rb">${s.atc.rb.startsWith("Nothing") ? esc(s.atc.rb) : "You read back: " + rbHTML(s.atc.rb)}</div></div>` : "";
   const doBlock = !s.do ? "" : reads.big ? `<details class="do"><summary>What to do</summary><p>${esc(s.do)}</p></details>` : `<div class="do">${esc(s.do)}</div>`;
   $("card").innerHTML = `<div class="card-in">
@@ -745,25 +756,48 @@ if(LIVE){
 // Primary types win; fallbacks (AWOS for ATIS, radio/info for CTAF, radar for approach) only fill gaps.
 const COMM_TYPES = {ATIS:"atis", CTAF:"ctaf", UNIC:"ctaf", UNICOM:"ctaf", CLR:"clr", CLD:"clr", CLEARANCE:"clr", DELIVERY:"clr", GND:"gnd", GROUND:"gnd",
   TWR:"twr", TOWER:"twr", APP:"app", APPROACH:"app", DEP:"dep", DEPARTURE:"dep"};
-const COMM_FALLBACK = {AWOS:"atis", ASOS:"atis", RDO:"ctaf", RADIO:"ctaf", AFIS:"ctaf", INFO:"ctaf", ATF:"ctaf", RDR:"app", RADAR:"app"};
-function mapComms(list, icao){
-  const m = {}, fb = {};
-  (list||[]).forEach(c=>{
-    if(c.airport && c.airport !== icao) return;
+const COMM_FALLBACK = {AWOS:"atis", ASOS:"atis", RDO:"ctaf", RADIO:"ctaf", AFIS:"ctaf", INFO:"ctaf", ATF:"ctaf", RDR:"app", RADAR:"app", CTR:"app", CENTER:"app", CENTRE:"app"};
+// SI lists NEIGHBOURING stations under an airport too (at NTTB: Raiatea Tower, Maupiti AFIS, Tahiti Control). When we know the
+// airport's name, entries whose callsign shares a word with it come first, so "BORA BORA" tower beats "RAIATEA" tower.
+function ownComms(list, icao, name){
+  const words = String(name||"").toUpperCase().split(/[^A-Z]+/).filter(w=>w.length>=4);
+  const mine = (list||[]).filter(c=>!c.airport || c.airport===icao);
+  if(!words.length) return mine;
+  const own = c => !c.callsign || words.some(w=>String(c.callsign).toUpperCase().includes(w));
+  return [...mine.filter(own), ...mine.filter(c=>!own(c))];
+}
+function mapComms(list, icao, name){
+  const m = {}, fb = {}; let sawAtis = false, sawAwos = false;
+  const words = String(name||"").toUpperCase().split(/[^A-Z]+/).filter(w=>w.length>=4);
+  const isOwn = c => !words.length || !c.callsign || words.some(w=>String(c.callsign).toUpperCase().includes(w));
+  ownComms(list, icao, name).forEach(c=>{
     const t = String(c.type||"").toUpperCase().trim(), f = String(c.freq||"").replace(/(\.\d*?[1-9])0+$/,"$1").replace(/\.0+$/,"");
     if(!f) return;
+    if(t==="ATIS") sawAtis = true; if(t==="AWOS"||t==="ASOS") sawAwos = true;
     if(COMM_TYPES[t]){ if(!m[COMM_TYPES[t]]) m[COMM_TYPES[t]] = f; }
-    else if(COMM_FALLBACK[t]){ if(!fb[COMM_FALLBACK[t]]) fb[COMM_FALLBACK[t]] = f; }
+    // Fallbacks (a neighbour's AFIS as "CTAF", centre as "approach") only from the field's own stations once we know its name.
+    else if(COMM_FALLBACK[t] && (isOwn(c) || COMM_FALLBACK[t]==="app")){ if(!fb[COMM_FALLBACK[t]]) fb[COMM_FALLBACK[t]] = f; }
   });
   for(const k in fb){ if(!m[k]) m[k] = fb[k]; }
   if(m.app && !m.dep) m.dep = m.app; if(m.dep && !m.app) m.app = m.dep;
+  m.wx = sawAtis ? "atis" : sawAwos ? "awos" : "none";
   return m;
 }
-// The spoken station name SayIntentions uses, e.g. "RALEIGH" or "AMPURIABRAVA" -> "Raleigh".
+// The spoken station name SayIntentions uses, e.g. "RALEIGH" or "BORA BORA" -> "Bora Bora". Prefers the field's own stations
+// (tower, ground, ATIS, CTAF) over centre/radar/other fields' AFIS.
 function commsName(list, icao){
-  const c = (list||[]).find(x=>(!x.airport || x.airport===icao) && x.callsign && String(x.callsign).trim());
+  const mine = (list||[]).filter(x=>(!x.airport || x.airport===icao) && x.callsign && String(x.callsign).trim());
+  const c = mine.find(x=>COMM_TYPES[String(x.type||"").toUpperCase().trim()]) || mine[0];
   if(!c) return "";
   return String(c.callsign).trim().toLowerCase().replace(/\b\w/g, ch=>ch.toUpperCase());
+}
+// Live weather one-liner from getWX: "wind 150 at 17 gusting 30, altimeter 29.91 (QNH 1013)".
+function wxLine(w){
+  if(!w || (w.wind_direction==null && !w.altimeter)) return "";
+  const q = (String(w.metar||"").match(/\bQ(\d{4})\b/)||[])[1];
+  const wind = w.wind_direction==null ? "" : (+w.wind_speed ? `wind ${String(w.wind_direction).padStart(3,"0")} at ${w.wind_speed}${+w.wind_gusting ? ` gusting ${w.wind_gusting}` : ""}` : "wind calm");
+  const alt = w.altimeter ? `altimeter ${w.altimeter}${q ? ` (QNH ${q})` : ""}` : "";
+  return [wind, alt].filter(Boolean).join(", ");
 }
 // getWX runway fields are strings like "17" or "5L,5R,14". GA pilots get the preferred GA runway when SI names one.
 // mode "dep" (default) for the airport you're leaving, "arr" for the destination: picks the arriving runway instead.
@@ -782,18 +816,35 @@ function siRunways(wxa, f, mode){
 // An airport object built only from SayIntentions, for fields MSFS loaded that aren't in any of our data.
 function buildLiveAirport(icao, f, wx, mode){
   const comms = (wx && wx.comms) || [], wxa = ((wx && wx.airports) || []).find(a=>a.airport===icao) || {};
-  const fq = mapComms(comms, icao), rw = siRunways(wxa, f, mode), name = commsName(comms, icao) || icao;
+  const name = commsName(comms, icao) || icao, fq = mapComms(comms, icao, name), rw = siRunways(wxa, f, mode);
   return { id:icao, full:name, city:"", st:"", runways:rw.list, activeRwy:rw.active, name, source:"si", region:regionFromIdent(icao),
-    atis:fq.atis||"", ctaf:fq.ctaf||"", clr:fq.clr||"", gnd:fq.gnd||"", twr:fq.twr||"", app:fq.app||"", dep:fq.dep||"", park:"the FBO" };
+    wx: wxa.atis ? "atis" : fq.wx, atis:fq.atis||"", ctaf:fq.ctaf||"", clr:fq.clr||"", gnd:fq.gnd||"", twr:fq.twr||"", app:fq.app||"", dep:fq.dep||"", park:"the FBO" };
 }
+// Taxiway lists as ATC says them: "F, E, A" or "Alpha, Bravo" or "A1, B". Only single letters (+digits) or phonetic words count,
+// so the list stops before "hold short" / "cross". These regexes are built case-SENSITIVE for that reason; keywords use ci().
+const TWY = `(?:${Object.values(PHON).join("|")}|[A-Z][0-9]{0,2}(?![a-z]))`, TWY_LIST = `(${TWY}(?:,?\\s+(?:and\\s+)?${TWY})*)`;
+const ci = w => w.split("").map(c => /[a-z]/i.test(c) ? `[${c.toUpperCase()}${c.toLowerCase()}]` : c).join("");
+const idSay = x => x.length <= 3 ? x.toUpperCase() : x;
 function readbackFor(text){
   const T = " " + text.replace(/\s+/g," ") + " ", parts = [];
-  const hasAction = /squawk \d|heading \d|climb|descend|maintain|hold short|cleared|taxi|\d{3}\.\d/i;
+  const hasAction = /squawk \d|heading \d|climb|descend|maintain|hold short|cleared|taxi|cross runway|line up and wait|\d{3}\.\d/i;
   if(/radar services? terminated/i.test(T)) return `Squawk VFR, ${shortCS()}.`;
   if(!hasAction.test(T)) return "";
-  const taxi = T.match(/runway\s+(\w+)[,.]?\s*taxi via ([A-Z0-9 ,]+?)(?:\.|hold|contact|$)/i);
-  if(taxi) parts.push(`Runway ${taxi[1].toUpperCase()}, taxi via ${taxi[2].trim().replace(/,\s*$/,"")}`);
-  const hs = T.match(/hold(?:ing)? short (?:of )?runway\s+(\w+)/i); if(hs) parts.push(`hold short runway ${hs[1].toUpperCase()}`);
+  // Taxi clearances come in several shapes; capture runway, route and destination from any of them.
+  let m, rwy = "", via = "", dest = "";
+  const RW = ci("runway"), TX = ci("taxi"), VIA = ci("via"), TO = ci("to");
+  if((m = T.match(new RegExp(`${RW}\\s+(\\w+)[,.]?\\s*(?:${TX}\\s+)?${VIA}\\s+${TWY_LIST}`)))){ rwy = m[1]; via = m[2]; }
+  else if((m = T.match(new RegExp(`${TX}\\s+${VIA}\\s+${TWY_LIST}\\s+${TO}\\s+${RW}\\s+(\\w+)`)))){ via = m[1]; rwy = m[2]; }
+  else if((m = T.match(new RegExp(`${TX}\\s+(?:${TO}\\s+)?${RW}\\s+(\\w+)(?:\\s+${VIA}\\s+${TWY_LIST})?`)))){ rwy = m[1]; via = m[2]||""; }
+  else if((m = T.match(new RegExp(`${TX}\\s+${TO}\\s+(${ci("the ramp")}|${ci("the")}\\s+\\w+|${ci("parking")}|${ci("gate")}\\s+\\w+|${ci("stand")}\\s+\\w+)(?:\\s+${VIA}\\s+${TWY_LIST})?`)))){ dest = m[1].toLowerCase(); via = m[2]||""; }
+  else if((m = T.match(new RegExp(`\\b(${ci("ramp")}|${ci("parking")})\\s+${VIA}\\s+${TWY_LIST}`)))){ dest = "the "+m[1].toLowerCase(); via = m[2]; }
+  const viaSay = via ? via.replace(/\s+and\s+/g, ", ").replace(/\s*,\s*/g, ", ").replace(/(\S+)\s+(?=\S)/g, (x,w)=>w.endsWith(",")?x:w+", ").trim() : "";
+  if(rwy) parts.push(`Runway ${rwy.toUpperCase()}${viaSay?`, taxi via ${viaSay}`:""}`);
+  else if(dest) parts.push(`${dest.charAt(0).toUpperCase()+dest.slice(1)}${viaSay?` via ${viaSay}`:""}`);
+  const cross = T.match(/cross runway\s+(\w+)/i); if(cross) parts.push(`cross runway ${cross[1].toUpperCase()}`);
+  const hs = T.match(/hold(?:ing)? short (?:of )?(runway|taxiway)\s+(\w+)/i); if(hs) parts.push(`hold short ${hs[1].toLowerCase()} ${idSay(hs[2])}`);
+  const luaw = T.match(/runway\s+(\w+),?\s*line up and wait/i) || T.match(/line up and wait,?\s*runway\s+(\w+)/i);
+  if(luaw) parts.push(`runway ${luaw[1].toUpperCase()}, line up and wait`);
   const to = T.match(/runway\s+(\w+)\b.*?cleared for take-?off/i) || T.match(/cleared for take-?off,? runway\s+(\w+)/i);
   if(to) parts.push(`cleared for takeoff runway ${to[1].toUpperCase()}`);
   const ld = T.match(/runway\s+(\w+)\b.*?cleared to land/i) || T.match(/cleared to land,? runway\s+(\w+)/i);
@@ -828,6 +879,17 @@ function parseCallsign(raw){
   if(chars.startsWith("N")) chars = chars.slice(1);
   if(!/^[0-9][0-9A-Z]{0,4}$/.test(chars)) return null;
   return {tail: "N"+chars, type};
+}
+// flight.json's current_airport is sometimes a station word, not an airport: SI reports "CTAF" once you're airborne and not
+// talking to a field. Only real idents count; otherwise fall back to the destination when arriving, else the origin.
+const NOT_AIRPORTS = new Set(["CTAF","UNICOM","GUARD","TOWER","GROUND","APP","DEP","CTR","RAMP","ATIS","NONE","NULL","N/A","MULTICOM"]);
+const validIdent = s => { s = String(s||"").trim().toUpperCase(); return /^[A-Z0-9]{3,4}$/.test(s) && !NOT_AIRPORTS.has(s) ? s : ""; };
+function liveIcao(f){
+  f = f || {};
+  const cur = validIdent(f.current_airport), org = validIdent(f.origin), dst = validIdent(f.destination);
+  if(cur) return cur;
+  if(String(f.overall_intention||"").toLowerCase().startsWith("arriv") && dst) return dst;
+  return org || dst || "";
 }
 // SayIntentions' callsign seeds the tail and aircraft ONCE per distinct callsign. After that the pilot's own choice in
 // the Me tab wins, otherwise picking "Cirrus" would snap back to "Skyhawk" on the next 3-second poll.
@@ -865,18 +927,25 @@ function renderLive(st){
   aiOn = st.ai;
   if(typeof st.paused === "boolean" && st.paused !== paused){ paused = st.paused; renderPause(); }
   if(st.mentor){ mentorCount = st.mentor; renderMentor(); }
-  const f = st.flight || {}, icao = f.current_airport || f.origin || "";
+  const f = st.flight || {}, icao = liveIcao(f);
   if(siSeedMe(f.callsign)) renderMe();
   const dst = (f.destination && f.destination !== icao) ? f.destination : "";
   const wxFor = id => ((st.wx && st.wx.airports) || []).find(a=>a.airport===id) || {};
+  // An airport outside the US DB may be in the worldwide file (NTTB is). Load it so the real name and frequencies win over SI's neighbour-mixed list.
+  if([icao, dst].some(id=>id && !BY.has(id) && !BYW.has(id))) loadWorld().catch(()=>{});
   [[icao,"dep"],[dst,"arr"]].forEach(([id, mode])=>{
     if(!id) return;
-    liveFreq[id] = mapComms(st.wx && st.wx.comms, id);          // SayIntentions' frequencies override the built-in ones
+    const row = BY.get(id) || BYW.get(id), known = row ? row[1] : "";
+    liveFreq[id] = mapComms(st.wx && st.wx.comms, id, known);  // SayIntentions' frequencies override the built-in ones
+    if(wxFor(id).atis) liveFreq[id].wx = "atis";                 // SI is broadcasting an ATIS text, so there is a letter
     liveRwy[id] = siRunways(wxFor(id), f, mode);                // and so does its active runway (arriving one for the destination)
-    if(!BY.has(id) && !BYW.has(id)) liveAirports[id] = buildLiveAirport(id, f, st.wx, mode);
+    if(!row) liveAirports[id] = buildLiveAirport(id, f, st.wx, mode);
   });
   const rwy = icao ? liveRwy[icao].active : "";
-  $("lv-status").textContent = `Live · ${f.callsign||""} at ${icao||"—"}${dst?` → ${dst}`:""}${rwy?` · runway ${rwy}`:""}${aiOn?" · AI coach on":""}`;
+  const where = !icao ? "at —" : String(f.on_ground)==="0" ? `airborne, ${validIdent(f.current_airport) ? "near" : "from"} ${icao}` : `at ${icao}`;
+  $("lv-status").textContent = `Live · ${f.callsign||""} ${where}${dst?` → ${dst}`:""}${rwy?` · runway ${rwy}`:""}${aiOn?" · AI coach on":""}`;
+  const wl = icao ? wxLine(wxFor(icao)) : "";
+  $("lv-wx").textContent = wl ? `${icao}: ${wl}${liveFreq[icao].wx!=="atis" ? " · no ATIS letter here" : ""}` : "";
   // Re-pick when the airport changes, or when SI's runway or frequencies change while the pilot is still on the setup screen.
   const sig = icao ? JSON.stringify([icao, dst, liveFreq[icao], liveRwy[icao], liveFreq[dst], liveRwy[dst], (liveAirports[icao]||{}).name, (liveAirports[dst]||{}).name]) : "";
   if(icao && !flight && (icao !== liveAp || sig !== lastLiveSig)){
@@ -905,8 +974,9 @@ function renderLive(st){
   const atc = [...comms].reverse().find(c=>c.incoming_message);
   if(atc && atc.id !== lastAtcId){
     lastAtcId = atc.id;
-    const rb = readbackFor(atc.incoming_message);
-    $("lv-atc").innerHTML = `<div class="heard"><b>${esc(atc.station_name||"ATC")}${atc.frequency?` (${esc(atc.frequency)})`:""}:</b> “${esc(atc.incoming_message)}”</div>
+    const heard = atc.incoming_message_english || atc.incoming_message;   // SI may be speaking the local language; parse the English
+    const rb = readbackFor(heard);
+    $("lv-atc").innerHTML = `<div class="heard"><b>${esc(atc.station_name||"ATC")}${atc.frequency?` (${esc(atc.frequency)})`:""}:</b> “${esc(atc.incoming_message)}”${heard!==atc.incoming_message?`<br><small>(${esc(heard)})</small>`:""}</div>
       <div class="hint">${rb?"Say back:":""}</div><div class="rbk">${rb ? rbHTML(rb) : "Nothing to read back. Keep flying."}</div><div class="mean hint"></div>`;
     if(navigator.vibrate) navigator.vibrate(90);
     if(aiOn) coachAI(atc, $("lv-atc"));
@@ -917,6 +987,12 @@ function renderLive(st){
   if(mine && mine.id !== lastMeId){
     lastMeId = mine.id;
     const w = [];
+    // SayIntentions writes its own notices into the outgoing slot when it couldn't hear you. Those aren't your words.
+    if(/mic key held|no audio captured|check your microphone|not understood|didn't catch/i.test(mine.outgoing_message)){
+      $("lv-me").innerHTML = `<div class="warn">🎙️ SayIntentions didn't hear you: “${esc(mine.outgoing_message)}” Hold the push-to-talk key down the whole time you speak, and check the mic in SayIntentions' settings.</div>`;
+      if(navigator.vibrate) navigator.vibrate([60,40,60]);
+      return;
+    }
     if(callsignMissing(mine.outgoing_message)) w.push(`Add your callsign: "${shortCS()}".`);
     const wt = wrongType(mine.outgoing_message); if(wt) w.push(`You said "${wt}", but you're flying a ${me.type}.`);
     $("lv-me").innerHTML = w.length ? `<div class="warn">⚠️ Your last call: ${w.join(" ")}</div>` : "";

@@ -7,6 +7,10 @@ const grab = name => { const i = js.indexOf("function "+name+"("); let d=0, j=js
   for(let k=j;;k++){ if(js[k]=="{")d++; if(js[k]=="}"&&--d==0) return js.slice(i,k+1); } };
 const vf = js.match(/const validFreq = [^\n]+/)[0];
 const shortCS = () => "Cirrus Three Alpha Zulu";
+eval(js.match(/const PHON = [^\n]+/)[0].replace("const ","var ")); eval(js.match(/const NUM = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const ci = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const TWY = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const idSay = [^\n]+/)[0].replace("const ","var "));
 eval(grab("readbackFor")); eval(vf.replace("const ","var "));
 let fails = 0; const eq = (a,b,m)=>{ const p = a===b; if(!p) fails++; console.log((p?"PASS ":"FAIL ")+m+(p?"":`\n   got: ${a}\n  want: ${b}`)); };
 const C = ", Cirrus Three Alpha Zulu.";
@@ -22,7 +26,6 @@ eq(readbackFor("Traffic 2 o'clock, 3 miles, a Cessna."), "", "traffic advisory -
 eq(readbackFor("Contact tower 118.3."), "Tower 118.3"+C, "freq change");
 for (const [f,w] of [["121.9",true],["118.0",true],["136.975",true],["117.95",false],["137",false],["108.4",false],["abc",false],["",false]])
   eq(validFreq(f), w, `validFreq(${JSON.stringify(f)})`);
-eval(js.match(/const PHON = [^\n]+/)[0].replace("const ","var ")); eval(js.match(/const NUM = [^\n]+/)[0].replace("const ","var "));
 var $ = () => ({options:["Cirrus","Diamond","Cessna","Skyhawk","Piper"].map(value=>({value}))});
 eval(grab("parseCallsign"));
 const pc = x => JSON.stringify(parseCallsign(x));
@@ -43,6 +46,7 @@ eval(js.match(/const COMM_FALLBACK = [^\n]+/)[0].replace("const ","var "));
 var KNOWN = {};
 // direct eval at top level so the declarations land in this scope
 eval(grab("spoken"));
+eval(grab("ownComms"));
 eval(grab("rowToAp"));
 eval(grab("applyLive"));
 eval(grab("searchRows"));
@@ -111,6 +115,7 @@ eq(egll.runways.includes("09L"), true, "(c) EGLL runways");
 
 // ---- flight plan (two legs), destination runway, custom airports ----
 var me = {tail:"N123AZ", type:"Cirrus", student:true};
+var LIVE = false;
 eval(js.match(/const sayChar = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const tailBody = [^\n]+/)[0].replace("const ","var "));
 var fullCS = () => "Cirrus One Two Three Alpha Zulu";   // shortCS is stubbed near the top of this file
@@ -119,6 +124,7 @@ eval(js.match(/const towered = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const DEPARTS = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const OPP = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const looksLikeIdent = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const wxPhrase = [^\n]+/)[0].replace("const ","var "));
 eval(grab("legs")); eval(grab("build")); eval(grab("buildLeg")); eval(grab("customToAp"));
 const ktta = rowToAp(["KTTA","Raleigh Executive Jetport","Sanford","NC","P125.3|W120.625|D135.075|U123.075","03 21"], "db");
 const krdu2 = rowToAp(["KRDU","Raleigh-Durham International Airport","Raleigh/Durham","NC","P124.8|A123.8|D120.1|G121.7|T119.3|U122.95","05L 23R 05R 23L 14 32"], "db");
@@ -210,4 +216,54 @@ eq(me.type, "Cirrus", "seed: pilot's Cirrus is kept (was reverting to Skyhawk)")
 eq(siSeedMe("Cirrus-Four-Five-Six-Kilo"), true, "seed: a new SI callsign applies again");
 eq(me.tail, "N456K", "seed: new tail from SI");
 eq(siSeedMe(""), false, "seed: empty callsign ignored");
+
+// ---- taxi phrasings, weather type, neighbour stations ----
+eval(grab("readbackFor")); eval(grab("ownComms")); eval(grab("mapComms")); eval(grab("commsName")); eval(grab("wxLine"));
+const CS = ", Cirrus Three Alpha Zulu.";
+eq(readbackFor("Cirrus 3AZ, taxi to runway 5R via Alpha, Bravo, hold short of runway 5R."), "Runway 5R, taxi via Alpha, Bravo, hold short runway 5R"+CS, "taxi: 'taxi to runway X via ...'");
+eq(readbackFor("Cirrus 3AZ, taxi to runway 23 via Alpha, Charlie."), "Runway 23, taxi via Alpha, Charlie"+CS, "taxi: no hold short");
+eq(readbackFor("Cirrus 3AZ, runway 23 via Alpha, Charlie, hold short of runway 14."), "Runway 23, taxi via Alpha, Charlie, hold short runway 14"+CS, "taxi: 'runway X via ...' without the word taxi");
+eq(readbackFor("Cirrus 3AZ, taxi via Bravo to runway 17, cross runway 9."), "Runway 17, taxi via Bravo, cross runway 9"+CS, "taxi: 'via ... to runway' plus cross");
+eq(readbackFor("Cirrus 3AZ, taxi to the ramp via Alpha, Foxtrot."), "The ramp via Alpha, Foxtrot"+CS, "taxi: to the ramp");
+eq(readbackFor("Cirrus 3AZ, continue taxiing, hold short of taxiway Charlie."), "Hold short taxiway Charlie"+CS, "taxi: hold short of a taxiway");
+eq(readbackFor("Cirrus 3AZ, taxi to runway 03, no taxiway assigned."), "Runway 03"+CS, "taxi: runway only");
+eq(readbackFor("Cirrus 3AZ, taxi to runway 11 via A1, B and C."), "Runway 11, taxi via A1, B, C"+CS, "taxi: 'A1, B and C'");
+eq(readbackFor("Cirrus 3AZ, runway 5R, line up and wait."), "Runway 5R, line up and wait"+CS, "luaw: runway first");
+eq(readbackFor("Cirrus 3AZ, line up and wait runway 5R."), "Runway 5R, line up and wait"+CS, "luaw: runway after");
+eq(readbackFor("Cirrus 3AZ, runway 5R, taxi via F, E, A, hold short runway 5R."), "Runway 5R, taxi via F, E, A, hold short runway 5R"+CS, "taxi: original phrasing still works");
+eq(wxPhrase({wx:"atis"}, "Bravo"), "with information Bravo", "wx: ATIS with letter");
+eq(wxPhrase({wx:"atis"}, ""), "with information [letter]", "wx: ATIS, letter not yet known");
+eq(wxPhrase({wx:"awos"}, ""), "with the weather", "wx: AWOS has no letter");
+eq(wxPhrase({wx:"none"}, ""), "", "wx: nothing to say where there's no broadcast");
+eq(rowToAp(["X","Y","","","T118.9","11 29"],"world").wx, "none", "wx: row with tower but no ATIS/AWOS -> none");
+eq(rowToAp(["X","Y","","","A123.8|T118.9",""],"db").wx, "atis", "wx: row with ATIS");
+eq(rowToAp(["X","Y","","","W120.6|U123",""],"db").wx, "awos", "wx: row with AWOS");
+// the real NTTB comms list from SI: neighbours included
+const nttb = [{type:"CTR",freq:"134.7",callsign:"TAHITI CONTROL",airport:"NTTB"},{type:"AFIS",freq:"118.3",callsign:"MAUPITI",airport:"NTTB"},
+  {type:"AFIS",freq:"119.3",callsign:"HUAHINE",airport:"NTTB"},{type:"TWR",freq:"118.5",callsign:"RAIATEA",airport:"NTTB"},{type:"TWR",freq:"118.9",callsign:"BORA BORA",airport:"NTTB"}];
+let mm = mapComms(nttb, "NTTB", "Bora Bora Airport");
+eq(mm.twr, "118.9", "neighbours: Bora Bora tower beats Raiatea tower when the name is known");
+eq(mm.app, "134.7", "neighbours: Tahiti Control becomes approach/departure fallback");
+eq(mm.wx, "none", "neighbours: no ATIS at NTTB -> none");
+eq(mapComms(nttb, "NTTB").twr, "118.5", "neighbours: without a name the first tower wins (known limitation)");
+eq(commsName(nttb, "NTTB"), "Raiatea", "neighbours: commsName prefers tower/ground callsigns over centre");
+eq(mapComms([{type:"ATIS",freq:"123.8",airport:"K1"},{type:"TWR",freq:"119.3",airport:"K1"}], "K1").wx, "atis", "wx: ATIS comm -> atis");
+eq(wxLine({wind_direction:150, wind_speed:17, wind_gusting:30, altimeter:"29.91", metar:"NTTB 071600Z AUTO 15017KT 9999 Q1013"}), "wind 150 at 17 gusting 30, altimeter 29.91 (QNH 1013)", "wxLine: full");
+eq(wxLine({wind_direction:0, wind_speed:0, altimeter:"30.01", metar:"KRDU 00000KT A3001"}), "wind calm, altimeter 30.01", "wxLine: calm, no QNH");
+eq(wxLine({}), "", "wxLine: nothing");
+
+// ---- current_airport placeholders from SI ----
+eval(js.match(/const NOT_AIRPORTS = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const validIdent = [^\n]+/)[0].replace("const ","var "));
+eval(grab("liveIcao"));
+eq(liveIcao({current_airport:"CTAF", origin:"NTTB", destination:"", overall_intention:"departure"}), "NTTB", "icao: 'CTAF' placeholder -> origin while departing");
+eq(liveIcao({current_airport:"CTAF", origin:"NTTB", destination:"NTAA", overall_intention:"arrival"}), "NTAA", "icao: placeholder -> destination when arriving");
+eq(liveIcao({current_airport:"NTTB", origin:"KTTA"}), "NTTB", "icao: real current airport wins");
+eq(liveIcao({current_airport:null, origin:"", destination:""}), "", "icao: nothing known");
+eq(validIdent("7a4"), "7A4", "icao: FAA LID upper-cased");
+eq(validIdent("UNICOM"), "", "icao: UNICOM is not an airport");
+
+mm = mapComms(nttb, "NTTB", "Bora Bora Airport");
+eq(mm.ctaf, undefined, "neighbours: Maupiti's AFIS is NOT taken as Bora Bora's CTAF once the name is known");
+eq(mapComms(nttb, "NTTB").ctaf, "118.3", "neighbours: without a name the fallback is still taken (limitation)");
 process.exit(fails?1:0);

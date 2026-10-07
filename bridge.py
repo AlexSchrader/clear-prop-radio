@@ -59,7 +59,8 @@ def poll():
             cf = fd.get("current_flight") or {}
             flight = {k: fd.get(k) for k in ("callsign", "callsign_icao", "current_airport", "runway",
                                              "pattern_direction", "cleared_for_takeoff", "cleared_for_landing",
-                                             "distance_to_runway")}
+                                             "distance_to_runway", "overall_intention", "on_ground", "altitude",
+                                             "aircraft_icao")}
             flight.update(origin=cf.get("flight_origin"), destination=cf.get("flight_destination"),
                           dep_runway=cf.get("flight_plan_departing_runway"),
                           arr_runway=cf.get("flight_plan_arriving_runway"))

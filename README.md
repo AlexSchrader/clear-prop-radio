@@ -43,6 +43,15 @@ SayIntentions flight plan, with its active arriving runway preselected.
 To rebuild the data from OurAirports: `python tools/build_airports.py` (add `--update-index` to refresh the US list
 embedded in index.html).
 
+## Weather, letters, and taxi routes
+- The app only asks for an ATIS letter where the field has ATIS. AWOS fields get "with the weather"; fields with
+  neither (many small towered airports outside the US) skip the phrase, and live mode shows SayIntentions' wind,
+  altimeter and QNH at the top instead.
+- Taxi routes come from what ATC actually says. In live mode the Live panel turns the clearance into a readback list
+  ("Runway 11, taxi via Alpha, Bravo, hold short runway 11…"). The taxiways in the practice script are only an example.
+- If SayIntentions couldn't hear you (push-to-talk released too early, no microphone audio), the Live panel says so.
+  Until SI hears you, ATC says nothing, and there's nothing to read back.
+
 ## Live features
 These only show up on the phone page served by `bridge.py`. The GitHub Pages copy is the offline trainer.
 - **Pause / Resume**: a big button in the Live panel pauses the sim through SayIntentions.

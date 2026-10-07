@@ -80,7 +80,34 @@ unless `toManual`, auto-fills To from `flight.destination`, switching the flow c
 - Comms `callsign` is the spoken station name (`"RALEIGH"`, `"AMPURIABRAVA"`) or null. `commsName()` uses it as the
   airport name for SI-only airports.
 
+### Weather type and the ATIS letter (seen live at NTTB, 2026-10-07)
+Every airport object has `wx`: `"atis"` (A freq, or SI's getWX `atis` text non-empty), `"awos"` (W freq / AWOS comm),
+or `"none"`. Only `"atis"` has an information letter. `wxPhrase(ap, letter)` gives "with information X" / "with the
+weather" / "" and `buildLeg` uses it on every first-contact call; the weather step and the ATIS select adapt
+(`No ATIS letter at NTTB`). The Live panel shows `wxLine()` from getWX (wind, altimeter, QNH from the METAR).
+**Never ask for a letter where `wx !== "atis"`.** NTTB (Bora Bora) has a tower and no ATIS at all.
+
+### Neighbouring stations in getWX comms (seen live at NTTB)
+SI lists nearby fields under the same `airport`: at NTTB it returned Raiatea TWR 118.5, Maupiti/Huahine AFIS and Tahiti
+Control alongside Bora Bora TWR 118.9. `ownComms()`/`mapComms(list, icao, name)` put entries whose callsign shares a
+word with the known airport name first, and take fallbacks (AFIS→ctaf) only from own stations; CTR→app is allowed.
+So live mode **must know the name**: `renderLive` calls `loadWorld()` for any live ident not in the US DB. Without a
+name the first entry still wins (known limitation, tested).
+
+### Taxi clearances (readbackFor)
+Taxiway lists are matched case-sensitively (`TWY`: a letter + optional digits, or a phonetic word) so "hold short" and
+"cross" are never swallowed; keywords use `ci()`. Handled shapes: "runway X, taxi via …", "taxi to runway X via …",
+"runway X via …", "taxi via … to runway X", "taxi to the ramp via …", "hold short of taxiway C", "cross runway 9",
+"line up and wait". The live panel parses `incoming_message_english || incoming_message` (SI may speak the local
+language). SI's `taxi_path` is lat/lon waypoints for its own ribbon, not taxiway names.
+
 ### flight.json quirks (seen live)
+- `current_airport` can be a station word: SI reports **"CTAF"** once you're airborne and not talking to a field.
+  `liveIcao(f)` ignores anything in `NOT_AIRPORTS` or not 3-4 alphanumerics and falls back to the destination when
+  `overall_intention` is arrival, else the origin. The bridge passes `overall_intention`, `on_ground`, `altitude`,
+  `aircraft_icao`.
+- When SI couldn't hear the pilot it writes notices into the *outgoing* slot ("Mic key held for only 0.1 seconds",
+  "No audio captured"). `renderLive` shows those as a mic warning instead of treating them as the pilot's words.
 - `callsign` and `callsign_icao` arrive in spoken form, e.g. `Skyhawk-One-Two-Three-Alpha-Zulu`. `parseCallsign()` in
   index.html turns that into `{type:"Skyhawk", tail:"N123AZ"}`. Never copy the raw string into `me.tail`. `siSeedMe()` applies it **once per distinct
   callsign** (remembered in localStorage `cpr:siCallsign`); after that the pilot's choice in the Me tab wins. Before
