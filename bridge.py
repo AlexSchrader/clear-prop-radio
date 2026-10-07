@@ -69,10 +69,12 @@ def poll():
             except Exception as e:
                 print("[comms]", e)
             icao = flight.get("current_airport") or flight.get("origin") or ""
+            # Weather and frequencies for the airport you're at AND the flight-plan destination, in one call.
+            ids = ",".join(dict.fromkeys(x for x in (icao, flight.get("destination") or "") if x))
             wx = state.get("wx", {})
-            if icao and (icao != wx_icao or time.time() - wx_at > 120):
+            if ids and (ids != wx_icao or time.time() - wx_at > 120):
                 try:
-                    wx = sapi("getWX", api_key=key, icao=icao, with_comms=1); wx_at, wx_icao = time.time(), icao
+                    wx = sapi("getWX", api_key=key, icao=ids, with_comms=1); wx_at, wx_icao = time.time(), ids
                 except Exception as e:
                     print("[wx]", e)
             fid = str(cf.get("flight_id") or fd.get("flight_id") or

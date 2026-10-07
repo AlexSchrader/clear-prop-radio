@@ -11,7 +11,7 @@ class Mock(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path); q = dict(urllib.parse.parse_qsl(u.query))
         if u.path == "/flightJSON":
             body = {"flight_details": {"api_key": "SECRETKEY", "callsign": "N123AZ", "current_airport": "KTTA",
-                    "current_flight": {"flight_id": 777, "flight_origin": "KTTA"}}}
+                    "current_flight": {"flight_id": 777, "flight_origin": "KTTA", "flight_destination": "KRDU"}}}
         else:
             calls.append((u.path.rsplit("/",1)[-1], q))
             body = {"comm_history": []} if "getComms" in u.path else {"status": "OK"}
@@ -57,3 +57,5 @@ try:
     urllib.request.urlopen(f"http://127.0.0.1:{ap}/bridge.py"); ok(False, "bridge.py not served")
 except urllib.error.HTTPError as e:
     ok(e.code == 404, "bridge.py not served (404)")
+wx = [c for c in calls if c[0] == "getWX"]
+ok(wx and wx[-1][1]["icao"] == "KTTA,KRDU" and wx[-1][1]["with_comms"] == "1", "getWX fetched for origin AND flight-plan destination in one call")

@@ -15,6 +15,12 @@ Your phone shows what ATC just said and **exactly what to read back**, pulled li
 3. It prints an address like `http://192.168.1.23:8765`. Open that on your phone (same Wi-Fi).
 4. If Windows Firewall pops up, allow **Private networks**.
 
+## Fly a whole trip
+Pick **From**, choose Depart, then pick **To**. The script runs the departure, an en-route step that tunes the
+destination's weather, then the arrival there (tower or CTAF, picked automatically), with the radio display switching
+to the destination's frequencies and its own ATIS letter. In live mode the destination comes straight from your
+SayIntentions flight plan, with its active arriving runway preselected.
+
 ## Any airport, anywhere
 - **Every US airport** is built in. Search by code, name, or city.
 - **Worldwide**: if nothing in the US matches, the app fetches a worldwide list of medium and large airports
@@ -23,6 +29,8 @@ Your phone shows what ATC just said and **exactly what to read back**, pulled li
   SayIntentions' own data (name, frequencies, active runway) and marked "from SayIntentions".
 - In live mode, SayIntentions' active runway and frequencies always win over the built-in data, and your own fixes
   from the Airports tab win over both.
+- If a search finds nothing at all, you can **add the airport yourself** with one tap, then fill in its frequencies,
+  runways and spoken name on the Airports tab. The app remembers it.
 - Outside the US you'll see a banner: phraseology differs (e.g. "line up and wait", QNH in hPa). The scripts still
   use US/FAA phrasing for now.
 

@@ -108,4 +108,62 @@ const egll = rowToAp(searchRows(world, "EGLL")[0], "world");
 eq(egll.region, "ICAO", "(c) world rows are ICAO region");
 eq(egll.twr, "118.5", "(c) EGLL tower from OurAirports");
 eq(egll.runways.includes("09L"), true, "(c) EGLL runways");
+
+// ---- flight plan (two legs), destination runway, custom airports ----
+var me = {tail:"N123AZ", type:"Cirrus", student:true};
+eval(js.match(/const sayChar = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const tailBody = [^\n]+/)[0].replace("const ","var "));
+var fullCS = () => "Cirrus One Two Three Alpha Zulu";   // shortCS is stubbed near the top of this file
+eval(js.match(/const rwySay = r => \{[\s\S]*?\n\};/)[0].replace("const ","var "));
+eval(js.match(/const towered = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const DEPARTS = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const OPP = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const looksLikeIdent = [^\n]+/)[0].replace("const ","var "));
+eval(grab("legs")); eval(grab("build")); eval(grab("buildLeg")); eval(grab("customToAp"));
+const ktta = rowToAp(["KTTA","Raleigh Executive Jetport","Sanford","NC","P125.3|W120.625|D135.075|U123.075","03 21"], "db");
+const krdu2 = rowToAp(["KRDU","Raleigh-Durham International Airport","Raleigh/Durham","NC","P124.8|A123.8|D120.1|G121.7|T119.3|U122.95","05L 23R 05R 23L 14 32"], "db");
+// one leg, as before
+let steps = build({ap:ktta, flow:"udep", rwy:"03", dir:"north", pat:"left", alt:"3,500", dest:"", to:null, atis:["",""], last:false});
+eq(legs({ap:ktta, flow:"udep", to:null}).length, 1, "trip: no To -> one leg");
+eq(steps.every(x=>x.ap==="KTTA" && x.leg===0), true, "trip: single-leg steps tagged with origin");
+// two legs: untowered KTTA -> towered KRDU
+const f2 = {ap:ktta, flow:"udep", rwy:"03", dir:"north", pat:"left", alt:"3,500", dest:"", to:krdu2, toRwy:"05L", toPat:"right", atis:["Bravo","Charlie"], last:false};
+const L = legs(f2);
+eq(L.length, 2, "trip: To on a departure flow -> two legs");
+eq(L[1].flow, "tarr", "trip: towered destination gets the tower arrival");
+eq(L[1].dir, "south", "trip: inbound from the opposite direction of the outbound");
+eq(L[1].rwy+"/"+L[1].pat, "05L/right", "trip: destination runway and pattern");
+steps = build(f2);
+const i = steps.findIndex(x=>x.t.startsWith("En route"));
+eq(i > 0 && steps.slice(0,i).every(x=>x.leg===0 && x.ap==="KTTA"), true, "trip: departure steps first, tagged leg 0");
+eq(steps.slice(i).every(x=>x.leg===1 && x.ap==="KRDU"), true, "trip: en-route and arrival steps tagged leg 1 / KRDU");
+eq(steps[i].f, "123.8", "trip: en-route step tunes the destination ATIS");
+eq(steps[i].do.includes("Expect runway five left"), true, "trip: en-route step says the expected runway (US style, no leading zero)");
+const appr = steps.find(x=>x.t==="Call Approach");
+eq(appr.f, "124.8", "trip: approach call on KRDU approach frequency");
+eq(appr.say.includes("miles south"), true, "trip: arrival direction is south");
+eq(appr.say.includes("with information Charlie"), true, "trip: second ATIS letter used on leg 2");
+eq(steps.find(x=>x.t==="Landing").atc.rb, "Cleared to land runway five left, Cirrus Three Alpha Zulu.", "trip: landing readback at destination");
+// pattern laps ignore To
+eq(legs({ap:ktta, flow:"pattern", to:krdu2}).length, 1, "trip: pattern laps ignore To");
+// towered origin uses destination name in the clearance request
+const f3 = {ap:krdu2, flow:"tdep", rwy:"05L", dir:"south", pat:"left", alt:"3,500", to:ktta, toRwy:"21", toPat:"left", atis:["Alpha",""], last:false};
+steps = build(f3);
+eq(steps.find(x=>x.t==="Ask to leave").say.includes("VFR to Raleigh Exec"), true, "trip: clearance names the destination");
+eq(steps[steps.length-1].t, "Clear of the runway", "trip: untowered destination ends with clear-of-runway call");
+eq(steps.find(x=>x.t==="Inbound, about 10 miles out").say.includes("10 miles north"), true, "trip: inbound to KTTA from the north");
+// destination runway from SI arriving fields
+const arr = siRunways({active_runways_departing:"5L,5R,14", active_runways_arriving:"23L,23R", preferred_runway_ga_arriving:"23R", preferred_runway_ga_departing:"14"}, {}, "arr");
+eq(arr.active, "23R", "dest runway: GA arriving runway preferred");
+eq(arr.list[0], "23L", "dest runway: arriving runways listed first");
+eq(siRunways({}, {arr_runway:"32"}, "arr").active, "32", "dest runway: falls back to flight plan arriving runway");
+eq(siRunways({active_runways_arriving:"23L"}, {runway:"03", dep_runway:"03", arr_runway:""}, "arr").list.includes("03"), false, "dest runway: the origin's runway never leaks into the destination list");
+// custom airport
+var custom = {};
+const c = customToAp("LEAP", {full:"Empuriabrava"});
+eq(c.source+"/"+c.region+"/"+c.name, "custom/ICAO/Empuriabrava", "custom: source, region, spoken name");
+eq(customToAp("XYZ1", {}).name, "XYZ1", "custom: no name -> ident");
+eq(applyLive(c, null, {ctaf:"122.4", runways:["17","35"]}).runways.join(" "), "17 35", "custom: user runways apply");
+eq(looksLikeIdent("leap"), true, "custom: 'leap' offered as new airport");
+eq(looksLikeIdent("heathrow"), false, "custom: a word is not an ident");
 process.exit(fails?1:0);

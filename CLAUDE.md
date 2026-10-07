@@ -31,6 +31,21 @@ is in neither, `liveAirports[id]` holds an object built purely from SayIntention
 Every airport object carries `source` ("db" | "world" | "si") and `region` ("US" | "ICAO"). Non-US airports show
 the phraseology banner (`ICAO_BANNER`) on the card and above the script; scripts are still US/FAA phrasing.
 
+## Flight plan: one leg or two (build / legs / buildLeg)
+`legs(flight)` returns one leg (the original behaviour) or two when a destination `flight.to` is set on a departure
+flow (`tdep`/`udep`): leg 0 departs `flight.ap`, then an "En route" step, then leg 1 arrives at `flight.to` as `tarr`
+or `uarr` depending on `towered(to)`. The inbound direction is `OPP[dir]` (fly out north, arrive from the south), so
+no coordinates are needed. Each step carries `ap` (ident, shown on the LCD) and `leg`; `flight.atis` is an array
+indexed by leg, and the ATIS select edits the current step's leg. "Pattern laps" and arrival flows ignore To.
+Setup fields: `toAp` (destination object), `t-rwy`, `t-pat`; `toManual` is true once the pilot picked or cleared To by
+hand, after which SayIntentions' flight plan no longer overrides it.
+
+## Airports in no list (offline "auto fill")
+A search that matches nothing offers "Add XXXX as a new airport" (`looksLikeIdent`, 3-4 alphanumerics). That writes
+`custom[XXXX] = {full}` to localStorage `cpr:custom`; `customToAp()` builds a blank airport object (`source:"custom"`),
+and everything else (name, frequencies, runways, parking) comes from the Airports tab via `over[id]`, which now has a
+`runways` array too. For a custom airport the Airports tab's reset button becomes "Remove this airport".
+
 ## Hard rules
 - `bridge.py` stays stdlib-only, and `index.html` stays a single self-contained file. The only files it loads are
   `airports-world.json` (lazily) and `sw.js`, and it must work without either (file:// shows "couldn't load").
@@ -51,6 +66,10 @@ the phraseology banner (`ICAO_BANNER`) on the card and above the script; scripts
 
 SayIntentions sources: `http://localhost:63287/flightJSON`, then SAPI `getCommsHistory`, `getWX?with_comms=1`,
 `setPause`, `setFreq`, and `sayAs`. Docs: https://p2.sayintentions.ai/p2/docs/
+The bridge calls `getWX` with `icao=<current>,<destination>` (comma list) so the destination's ATIS, frequencies and
+arriving runway come down in the same call; `renderLive` updates `liveFreq`/`liveRwy`/`liveAirports` for both and,
+unless `toManual`, auto-fills To from `flight.destination`, switching the flow chip to a departure the first time.
+`siRunways(wxa, f, "arr")` picks `preferred_runway_ga_arriving` and never includes `f.runway` (that's the origin's).
 
 ### getWX quirks (seen live, 2026-10-05)
 - There is **no `active_runway` and no airport name**. Runways come as `active_runways_departing` /
@@ -94,6 +113,13 @@ SayIntentions sources: `http://localhost:63287/flightJSON`, then SAPI `getCommsH
 | Radar contact. / Traffic 2 o'clock, 3 miles, a Cessna. | (empty: nothing to read back) |
 
 ## Other test cases (tests/test_ui.js)
+- Flight plan: no To → one leg; KTTA(udep)→KRDU gives departure steps (leg 0), an en-route step tuning KRDU ATIS, then
+  the tower arrival (leg 1) from the south on 05L with the second ATIS letter; KRDU(tdep)→KTTA names "Raleigh Exec" in
+  the clearance request and ends with the CTAF clear-of-runway call; pattern laps ignore To.
+- Destination runway: `siRunways(..., "arr")` prefers the GA arriving runway, lists arriving runways first, falls back to
+  the flight-plan arriving runway, and never includes the origin's `f.runway`.
+- Custom airports: `customToAp`, user runways via `applyLive`, `looksLikeIdent("leap")` true / `("heathrow")` false.
+- Bridge: `getWX` is requested as `icao=KTTA,KRDU` when the flight plan has a destination.
 - (a) live airport not in DB: `buildLiveAirport("LEAP", ...)` from the real LEAP getWX payload → name "Ampuriabrava",
   CTAF 122.4 (from type RDO), runway 17, source "si", region "ICAO".
 - (b) SI runway/frequencies override DB (KRDU tower 119.3 → 127.45), user override beats SI, runways merged and
@@ -103,8 +129,8 @@ SayIntentions sources: `http://localhost:63287/flightJSON`, then SAPI `getCommsH
 ## Backlog
 - ICAO phraseology variants of the scripts ("line up and wait", QNH/hPa, "taxi to holding point", conditional
   clearances). Today non-US airports only get the banner.
-- Pick the arriving runway for arrival flows. `siRunways()` uses the GA departing runway as "active" regardless of
-  flow.
+- Single-airport *arrival* flows (`tarr`/`uarr` chosen on the From airport) still use the departing-runway logic for
+  "active now"; only the To leg uses `siRunways(..., "arr")`.
 - Service-worker cache versioning is manual (bump `CACHE` in sw.js); automate it from the build tool.
 - Port the Live panel into the Clear Prop iOS app. The bridge stays on the PC, and the app polls `/api/state` on
   the LAN.

@@ -60,6 +60,8 @@ button{cursor:pointer}
 .progress{display:flex;gap:4px;margin:12px 0}
 .progress i{flex:1;height:4px;border-radius:2px;background:var(--line)}
 .progress i.on{background:var(--say)}
+.progress i.leg2{margin-left:6px}
+.progress i.leg2.on{background:var(--atc)}
 .step-title{font-family:"Barlow Condensed",sans-serif;font-size:20px;font-weight:600;color:var(--dim);margin:4px 0 6px}
 .say{font-size:26px;line-height:1.3;font-weight:600;color:var(--say);margin:0 0 14px}
 .say.none{font-size:20px;color:var(--dim);font-weight:500}
@@ -132,7 +134,7 @@ button{cursor:pointer}
       <button class="pausebtn" id="lv-pause" aria-pressed="false">Pause sim</button>
     </div>
     <div id="setup">
-      <div class="field"><label for="f-q">Airport</label><input id="f-q" placeholder="Code, name, or city" autocomplete="off" autocapitalize="characters"></div>
+      <div class="field"><label for="f-q">From (where you are)</label><input id="f-q" placeholder="Code, name, or city" autocomplete="off" autocapitalize="characters"></div>
       <div class="results hidden" id="f-res"></div>
       <div class="recent" id="recent"></div>
       <div id="f-card"></div>
@@ -148,7 +150,15 @@ button{cursor:pointer}
           <div class="field"><label for="f-pat">Pattern</label><select id="f-pat"><option value="left">Left traffic</option><option value="right">Right traffic</option></select></div>
           <div class="field"><label for="f-alt">Altitude</label><input id="f-alt" placeholder="3,500" autocomplete="off"></div>
         </div>
-        <div class="field" id="f-dest-wrap"><label for="f-dest">Going to (spoken name)</label><input id="f-dest" placeholder="Raleigh Exec" autocomplete="off"></div>
+        <div id="f-to-wrap">
+          <div class="field"><label for="t-q">To (optional): the script continues with the arrival there</label><input id="t-q" placeholder="Code, name, or city" autocomplete="off" autocapitalize="characters"></div>
+          <div class="results hidden" id="t-res"></div>
+          <div id="t-card"></div>
+          <div class="row hidden" id="t-rest">
+            <div class="field"><label for="t-rwy">Runway there</label><select id="t-rwy"></select></div>
+            <div class="field"><label for="t-pat">Pattern there</label><select id="t-pat"><option value="left">Left traffic</option><option value="right">Right traffic</option></select></div>
+          </div>
+        </div>
         <button class="primary" id="start">Start radio script</button>
         <p class="hint">Pick the runway from ATIS. Not sure yet? Start anyway; step 1 tunes ATIS for you.</p>
       </div>
@@ -160,7 +170,7 @@ button{cursor:pointer}
       <div id="fl-banner"></div>
       <div id="card"></div>
       <div class="atisbar">
-        <span class="hint">ATIS letter</span><select id="atis"></select>
+        <span class="hint" id="atis-for">ATIS letter</span><select id="atis"></select>
         <button class="ghost" id="end">End flight</button>
       </div>
     </div>
@@ -182,6 +192,7 @@ button{cursor:pointer}
         <div class="field"><label for="a-app">Approach</label><input id="a-app" inputmode="decimal"></div>
         <div class="field"><label for="a-dep">Departure</label><input id="a-dep" inputmode="decimal"></div>
         <div class="field"><label for="a-park">Where you park</label><input id="a-park"></div>
+        <div class="field"><label for="a-rwys">Runways (e.g. 05 23 14 32)</label><input id="a-rwys" autocapitalize="characters"></div>
       </div>
       <button class="primary" id="a-save">Save changes</button>
       <p class="hint"><button class="ghost" id="a-reset">Reset to built-in data</button></p>
@@ -234,6 +245,8 @@ const regionFromIdent = id => (BY.has(id) || /^K[A-Z]{3}$/.test(id) || /^P[AHGJL
 const normRwy = r => { const m = String(r||"").trim().toUpperCase().match(/^0?(\d{1,2})([LRCWH])?$/); return m ? m[1].padStart(2,"0")+(m[2]||"") : String(r||"").trim().toUpperCase(); };
 const KNOWN ={ KTTA:{name:"Raleigh Exec", app:"125.3", dep:"125.3"}, KRDU:{name:"Raleigh", gnd:"121.9", twr:"127.45"} };
 let over = store.get("overrides", {});
+let custom = store.get("custom", {});          // airports the user added by hand: {ICAO: {full}}
+let toAp = null, toManual = false;             // destination picked on the setup screen; toManual = the pilot chose it, not SayIntentions
 let recent = store.get("recent", ["KTTA","KRDU"]);
 let me = store.get("me", {tail:"N123AZ", type:"Cirrus", student:true});
 let ladderDone = store.get("ladder", []);
@@ -266,9 +279,16 @@ function applyLive(base, live, user){
   for(const k in u){ if(u[k] !== undefined && u[k] !== "") a[k] = u[k]; }
   return a;
 }
+// An airport the user typed in that no list knows. Everything else comes from the Airports tab (over) or SayIntentions.
+function customToAp(id, c){
+  const full = (c && c.full) || id;
+  return { id, full, city:"", st:"", runways:[], activeRwy:"", name: full===id ? id : spoken(full), source:"custom", region:regionFromIdent(id),
+    atis:"", ctaf:"", clr:"", gnd:"", twr:"", app:"", dep:"", park:"the FBO" };
+}
+const looksLikeIdent = q => /^[A-Z0-9]{3,4}$/.test(q.trim().toUpperCase());
 function apGet(id){
   const r = BY.get(id) || BYW.get(id);
-  const base = r ? Object.assign(rowToAp(r, BY.has(id) ? "db" : "world"), KNOWN[id]||{}) : liveAirports[id];
+  const base = r ? Object.assign(rowToAp(r, BY.has(id) ? "db" : "world"), KNOWN[id]||{}) : (liveAirports[id] || (custom[id] && customToAp(id, custom[id])));
   if(!base) return null;
   return applyLive(base, {freqs: liveFreq[id], rwy: liveRwy[id]}, over[id]);
 }
@@ -309,13 +329,34 @@ const rwySay = r => {
 const flows = ap => towered(ap)
   ? [["tdep","Depart (tower)"],["tarr","Arrive (tower)"]]
   : [["pattern","Pattern laps"],["udep","Depart"],["uarr","Arrive"]];
+const DEPARTS = f => f==="tdep" || f==="udep";
+const OPP = {north:"south", northeast:"southwest", east:"west", southeast:"northwest", south:"north", southwest:"northeast", west:"east", northwest:"southeast"};
+// A flight is one leg (what the app always did) or two: depart From, fly en route, arrive at To.
+function legs(f){
+  const dep = {leg:0, ap:f.ap, flow:f.flow, rwy:f.rwy, dir:f.dir, pat:f.pat, alt:f.alt, last:f.last,
+    atis:(f.atis||[])[0]||"", dest: f.to ? f.to.name : (f.dest||"")};
+  if(!f.to || !DEPARTS(f.flow)) return [dep];
+  const arr = {leg:1, ap:f.to, flow: towered(f.to) ? "tarr" : "uarr", rwy:f.toRwy||"", dir: OPP[f.dir]||f.dir, pat:f.toPat||"left",
+    alt:f.alt, last:true, atis:(f.atis||[])[1]||"", dest:""};
+  return [dep, arr];
+}
 function build(f){
+  const L = legs(f); let s = buildLeg(L[0]);
+  if(L.length>1){
+    const to = L[1].ap, wx = to.atis ? "ATIS" : "CTAF";
+    s.push({t:`En route to ${to.name}`, f: to.atis || to.ctaf || "", st: wx, ap:to.id, leg:1, say:"",
+      do:`Climb to ${f.alt||"your cruise altitude"}, lean, and set the heading. Halfway there, tune ${to.name} ${wx} and listen while you fly. Expect runway ${L[1].rwy ? rwySay(L[1].rwy) : "[check the weather]"}.`});
+    s = s.concat(buildLeg(L[1]));
+  }
+  return s;
+}
+function buildLeg(f){
   const ap = f.ap, R = rwySay(f.rwy), P = f.pat, nm = ap.name, D = f.dir;
   const atis = f.atis ? `with information ${f.atis}` : "with information [letter]";
   const stu = me.student ? ", student pilot" : "";
   const F = fullCS(), S = shortCS(), T = `${nm} traffic`;
   const s = [];
-  const atisStep = {t:"Get the weather", f:ap.atis, st:`${ap.id} ATIS`, say:"",
+  const atisStep = {t:"Get the weather", f:ap.atis, st:"ATIS", say:"",
     do:"Listen for the information letter, wind, runway, and altimeter. Set the altimeter. Pick the letter below."};
   if(f.flow==="pattern"||f.flow==="udep"||f.flow==="uarr"){
     const cf = ap.ctaf || "122.9";
@@ -372,6 +413,7 @@ function build(f){
       atc:{says:"Taxi to the ramp via A, F.", rb:`Ramp via A, F, ${S}.`},
       do:"Tower will tell you to turn off and contact Ground. Read that back first, then switch."});
   }
+  s.forEach(x=>{ x.ap = ap.id; x.leg = f.leg||0; });
   return s;
 }
 
@@ -382,9 +424,12 @@ function renderStep(){
   $("lcd-freq").textContent = s.f || "—";
   $("lcd-freq").dataset.freq = s.f || "";
   $("lcd-freq").classList.toggle("tune", LIVE && !!s.f);
-  $("lcd-stn").textContent = `${flight.ap.id} ${s.st}`;
-  $("prog").innerHTML = steps.map((_,i)=>`<i class="${i<=step?"on":""}"></i>`).join("");
-  $("fl-banner").innerHTML = flight.ap.region==="ICAO" ? ICAO_BANNER : "";
+  $("lcd-stn").textContent = `${s.ap||flight.ap.id} ${s.st}`;
+  $("prog").innerHTML = steps.map((_,i)=>`<i class="${i<=step?"on":""}${steps[i].leg?" leg2":""}"></i>`).join("");
+  const stepAp = s.leg ? flight.to : flight.ap;
+  $("fl-banner").innerHTML = (stepAp && stepAp.region==="ICAO") ? ICAO_BANNER : "";
+  $("atis").value = (flight.atis||[])[s.leg||0] || "";
+  $("atis-for").textContent = flight.to ? `${s.ap||flight.ap.id} ATIS letter` : "ATIS letter";
   const atc = s.atc ? `<div class="atc"><div class="who">If ATC says</div><p>"${s.atc.says}"</p><p class="rb">${s.atc.rb.startsWith("Nothing")?s.atc.rb:"You read back: \""+s.atc.rb+"\""}</p></div>` : "";
   $("card").innerHTML = `<div class="card-in">
     <div class="step-title">${step+1}. ${s.t}</div>
@@ -398,10 +443,40 @@ function renderStep(){
 }
 
 
-function rwOpts(ap){
+function rwOpts(ap, sel){
+  sel = sel || "f-rwy";
   const opts = ap.runways.length ? ap.runways : [];
-  $("f-rwy").innerHTML = `<option value="">Not sure yet</option>` + opts.map(r=>`<option value="${esc(r)}">${esc(r)}${r===ap.activeRwy?" · active now":""}</option>`).join("");
-  if(ap.activeRwy) $("f-rwy").value = ap.activeRwy;
+  $(sel).innerHTML = `<option value="">Not sure yet</option>` + opts.map(r=>`<option value="${esc(r)}">${esc(r)}${r===ap.activeRwy?" · active now":""}</option>`).join("");
+  if(ap.activeRwy) $(sel).value = ap.activeRwy;
+}
+function sourceLine(ap){
+  if(ap.source==="si") return `<span class="badge">from SayIntentions</span> not in the built-in database`;
+  if(ap.source==="custom") return `<span class="badge">added by you</span> fill in its frequencies with "Fix this airport"`;
+  return `${esc(ap.full)}, ${esc(ap.city||"")} ${esc(ap.st)}${ap.source==="world"?` <span class="badge">worldwide data</span>`:""}`;
+}
+// Destination on the setup screen.
+function pickTo(id, manual){
+  const a = apGet(id); if(!a) return;
+  if(cur && a.id===cur.id){ toast("That's the airport you're leaving from.", true); return; }
+  toAp = a; if(manual) toManual = true;
+  $("t-q").value = ""; $("t-res").classList.add("hidden");
+  $("t-card").innerHTML = `<div class="apcard"><b>${esc(a.id)}</b> ${esc(a.name)} <small>${towered(a)?"Towered":"No tower, CTAF"}</small>
+    <button class="ghost" id="t-clear" style="float:right">Clear</button><br><small>${sourceLine(a)}</small>${freqRows(a)}
+    ${a.region==="ICAO" ? ICAO_BANNER : ""}
+    <p class="hint" style="margin:8px 0 0">Wrong? <button class="ghost" id="t-fix">Fix this airport</button></p></div>`;
+  $("t-clear").onclick = ()=>clearTo(true);
+  $("t-fix").onclick = ()=>{ document.querySelector('[data-tab="airports"]').click(); openEdit(a.id); };
+  rwOpts(a, "t-rwy"); $("t-rest").classList.remove("hidden");
+}
+function clearTo(manual){
+  toAp = null; if(manual) toManual = true;
+  $("t-card").innerHTML = ""; $("t-rest").classList.add("hidden"); $("t-rwy").innerHTML = "";
+}
+// Offline "auto fill": an airport in no list becomes a local entry the pilot completes on the Airports tab.
+function addCustom(id){
+  id = id.toUpperCase(); custom[id] = custom[id] || {full:id}; store.set("custom", custom);
+  toast(`${id} added. Fill in its frequencies on the Airports tab.`);
+  return id;
 }
 const ICAO_BANNER = `<div class="banner">Outside the US: phraseology differs (e.g. "line up and wait", QNH in hPa). Scripts use US/FAA phrasing.</div>`;
 function freqRows(ap){
@@ -412,9 +487,8 @@ function pick(id){
   cur = apGet(id); if(!cur) return;
   recent = [id, ...recent.filter(x=>x!==id)].slice(0,6); store.set("recent", recent);
   $("f-q").value = ""; $("f-res").classList.add("hidden");
-  const where = cur.source==="si" ? `<span class="badge">from SayIntentions</span> not in the built-in database`
-    : `${esc(cur.full)}, ${esc(cur.city||"")} ${esc(cur.st)}${cur.source==="world"?` <span class="badge">worldwide data</span>`:""}`;
-  $("f-card").innerHTML = `<div class="apcard"><b>${esc(cur.id)}</b> ${esc(cur.name)} <small>${towered(cur)?"Towered":"No tower, CTAF"}</small><br><small>${where}</small>${freqRows(cur)}
+  if(toAp && toAp.id===cur.id) clearTo(false);
+  $("f-card").innerHTML = `<div class="apcard"><b>${esc(cur.id)}</b> ${esc(cur.name)} <small>${towered(cur)?"Towered":"No tower, CTAF"}</small><br><small>${sourceLine(cur)}</small>${freqRows(cur)}
     ${cur.region==="ICAO" ? ICAO_BANNER : ""}
     <p class="hint" style="margin:8px 0 0">Wrong? <button class="ghost" id="fix">Fix this airport</button></p></div>`;
   $("fix").onclick = ()=>{ document.querySelector('[data-tab="airports"]').click(); openEdit(cur.id); };
@@ -429,11 +503,14 @@ function renderFlows(){
   if(!fl.find(x=>x[0]===v)) v = fl[0][0];
   $("f-flow").dataset.v = v;
   $("f-flow").innerHTML = fl.map(([k,l])=>`<button class="chip" data-v="${k}" aria-pressed="${k===v}">${l}</button>`).join("");
-  $("f-dest-wrap").classList.toggle("hidden", v!=="tdep");
+  $("f-to-wrap").classList.toggle("hidden", !DEPARTS(v));
 }
-function resultsHTML(list, world){
-  return list.map(r=>`<button data-id="${esc(r[0])}"><b>${esc(r[0])}</b> ${esc(r[1])}<br><small>${esc(r[2]||"")}, ${esc(r[3])}${world?" · worldwide":""}</small></button>`).join("")
-    || `<button disabled>No match. Try the 4-letter code, like KTTA${world?" or EGLL":""}.</button>`;
+function resultsHTML(list, world, q){
+  if(list.length) return list.map(r=>`<button data-id="${esc(r[0])}"><b>${esc(r[0])}</b> ${esc(r[1])}<br><small>${esc(r[2]||"")}, ${esc(r[3])}${world?" · worldwide":""}</small></button>`).join("");
+  const id = (q||"").trim().toUpperCase();
+  const own = Object.keys(custom).filter(k=>k.startsWith(id) && id.length>=2).map(k=>`<button data-id="${esc(k)}"><b>${esc(k)}</b> ${esc(custom[k].full||k)}<br><small>added by you</small></button>`).join("");
+  const add = looksLikeIdent(id) && !custom[id] ? `<button data-add="${esc(id)}"><b>Add ${esc(id)}</b> as a new airport<br><small>Not in any list. You'll fill in its frequencies.</small></button>` : "";
+  return own + add || `<button disabled>No match. Try the 4-letter code, like KTTA${world?" or EGLL":""}.</button>`;
 }
 // Search box handler shared by the Fly and Airports tabs. US results are instant; a worldwide lookup shows a placeholder while the file loads.
 let searchSeq = 0;
@@ -442,20 +519,27 @@ async function runSearch(inp, res){
   $(res).classList.toggle("hidden", q.trim().length<2);
   if(q.trim().length<2) return;
   const us = searchRows(DB, q);
-  if(us.length || q.trim().length<3){ $(res).innerHTML = resultsHTML(us, false); return; }
+  if(us.length || q.trim().length<3){ $(res).innerHTML = resultsHTML(us, false, q); return; }
   if(!WORLD) $(res).innerHTML = `<button disabled>No US match. Searching worldwide…</button>`;
   try{
     const r = await searchAll(q);
     if(mine !== searchSeq) return;
-    $(res).innerHTML = resultsHTML(r.list, r.world);
+    $(res).innerHTML = resultsHTML(r.list, r.world, q);
   }catch(e){
-    if(mine === searchSeq) $(res).innerHTML = `<button disabled>No US match, and the worldwide list couldn't load (offline?).</button>`;
+    if(mine === searchSeq) $(res).innerHTML = `<button disabled>The worldwide list couldn't load (offline?).</button>` + resultsHTML([], false, q).replace(/<button disabled>.*?<\/button>/, "");
   }
+}
+// Clicks in any results list: pick an airport, or add one that isn't in any list.
+function onResult(e, then){
+  const add = e.target.closest("[data-add]"); if(add){ then(addCustom(add.dataset.add)); return; }
+  const b = e.target.closest("[data-id]"); if(b) then(b.dataset.id);
 }
 function openEdit(id){
   const a = apGet(id); if(!a) return; editId = id;
   $("a-title").textContent = `${a.id} ${a.full}`;
   ["name","atis","ctaf","clr","gnd","twr","app","dep","park"].forEach(k=>$("a-"+k).value=a[k]||"");
+  $("a-rwys").value = (a.runways||[]).join(" ");
+  $("a-reset").textContent = custom[id] ? "Remove this airport" : "Reset to built-in data";
   $("a-form").classList.remove("hidden"); $("a-res").classList.add("hidden"); $("a-q").value="";
 }
 function renderMe(){
@@ -474,16 +558,19 @@ document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{
   $("dock").classList.toggle("hidden", !(b.dataset.tab==="fly" && flight));
 });
 $("f-q").oninput = ()=>runSearch("f-q","f-res");
-$("f-res").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) pick(b.dataset.id); };
+$("f-res").onclick = e=>onResult(e, pick);
 $("recent").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) pick(b.dataset.id); };
+$("t-q").oninput = ()=>runSearch("t-q","t-res");
+$("t-res").onclick = e=>onResult(e, id=>pickTo(id, true));
 $("f-flow").onclick = e=>{ const v=e.target.dataset.v; if(!v) return; $("f-flow").dataset.v=v; renderFlows(); };
 $("atis").innerHTML = `<option value="">—</option>` + Object.values(PHON).map(p=>`<option>${p}</option>`).join("");
-$("atis").onchange = ()=>{ flight.atis=$("atis").value; renderStep(); };
+$("atis").onchange = ()=>{ const s = build(flight)[step]; flight.atis[s.leg||0] = $("atis").value; renderStep(); };
 
 $("start").onclick = ()=>{
   if(!cur) return;
-  flight = {ap:apGet(cur.id), flow:$("f-flow").dataset.v, rwy:$("f-rwy").value, dir:$("f-dir").value, pat:$("f-pat").value,
-    alt:$("f-alt").value.trim(), dest:$("f-dest").value.trim(), atis:"", last:false};
+  const flow = $("f-flow").dataset.v, to = (toAp && DEPARTS(flow)) ? apGet(toAp.id) : null;
+  flight = {ap:apGet(cur.id), flow, rwy:$("f-rwy").value, dir:$("f-dir").value, pat:$("f-pat").value,
+    alt:$("f-alt").value.trim(), dest:"", to, toRwy:$("t-rwy").value, toPat:$("t-pat").value, atis:["",""], last:false};
   step = 0; $("atis").value="";
   $("setup").classList.add("hidden"); $("flight").classList.remove("hidden"); $("dock").classList.remove("hidden");
   renderStep(); window.scrollTo(0,0);
@@ -501,14 +588,21 @@ $("back").onclick = ()=>{ step--; renderStep(); };
 $("end").onclick = ()=>{ flight=null; $("flight").classList.add("hidden"); $("setup").classList.remove("hidden"); $("dock").classList.add("hidden"); };
 
 $("a-q").oninput = ()=>runSearch("a-q","a-res");
-$("a-res").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) openEdit(b.dataset.id); };
+$("a-res").onclick = e=>onResult(e, openEdit);
+function refreshPicked(id){ if(cur && cur.id===id) pick(id); if(toAp && toAp.id===id) pickTo(id, toManual); }
 $("a-save").onclick = ()=>{
   const o = {}; ["name","atis","ctaf","clr","gnd","twr","app","dep","park"].forEach(k=>o[k]=$("a-"+k).value.trim());
+  const rw = $("a-rwys").value.split(/[\s,]+/).map(normRwy).filter(Boolean); if(rw.length) o.runways = rw;
   over[editId] = o; store.set("overrides", over);
+  if(custom[editId] && o.name){ custom[editId].full = o.name; store.set("custom", custom); }
   $("a-save").textContent = "Saved"; setTimeout(()=>$("a-save").textContent="Save changes", 1200);
-  if(cur && cur.id===editId) pick(editId);
+  refreshPicked(editId);
 };
-$("a-reset").onclick = ()=>{ delete over[editId]; store.set("overrides", over); openEdit(editId); if(cur && cur.id===editId) pick(editId); };
+$("a-reset").onclick = ()=>{
+  delete over[editId]; store.set("overrides", over);
+  if(custom[editId]){ delete custom[editId]; store.set("custom", custom); $("a-form").classList.add("hidden"); if(toAp && toAp.id===editId) clearTo(false); if(cur && cur.id===editId){ cur=null; $("f-card").innerHTML=""; $("f-rest").classList.add("hidden"); } return; }
+  openEdit(editId); refreshPicked(editId);
+};
 
 ["m-tail","m-type","m-student"].forEach(id=>$(id).oninput=()=>{
   me={tail:$("m-tail").value.trim()||"N123AZ", type:$("m-type").value, student:$("m-student").checked};
@@ -520,7 +614,7 @@ $("ladder").onchange = e=>{ const i=+e.target.dataset.rung; ladderDone = e.targe
 
 /* ===== LIVE: SayIntentions via local bridge ===== */
 const LIVE = location.protocol === "http:";
-let lastAtcId = null, lastMeId = null, liveAp = null, lastLiveSig = "", aiOn = false;
+let lastAtcId = null, lastMeId = null, liveAp = null, lastLiveSig = "", lastLiveDst = "", aiOn = false;
 let liveSeeded = false, paused = false, mentorOn = store.get("mentor", false), mentorCount = {used:0, cap:30};
 let toastTimer = null;
 function toast(msg, err){
@@ -591,18 +685,23 @@ function commsName(list, icao){
   return String(c.callsign).trim().toLowerCase().replace(/\b\w/g, ch=>ch.toUpperCase());
 }
 // getWX runway fields are strings like "17" or "5L,5R,14". GA pilots get the preferred GA runway when SI names one.
-function siRunways(wxa, f){
+// mode "dep" (default) for the airport you're leaving, "arr" for the destination: picks the arriving runway instead.
+function siRunways(wxa, f, mode){
   wxa = wxa || {}; f = f || {};
   const split = s => String(s||"").split(/[,\s]+/).map(normRwy).filter(Boolean);
   const dep = split(wxa.active_runways_departing), arr = split(wxa.active_runways_arriving);
-  const list = []; [...dep, ...arr, normRwy(f.runway), normRwy(f.dep_runway), normRwy(f.arr_runway)].forEach(r=>{ if(r && !list.includes(r)) list.push(r); });
-  const active = normRwy(wxa.preferred_runway_ga_departing) || dep[0] || normRwy(f.runway) || normRwy(f.dep_runway) || "";
+  // f.runway / f.dep_runway describe the airport you're AT, so they only belong in the departure list.
+  const list = []; const order = mode==="arr" ? [...arr, ...dep, normRwy(f.arr_runway)] : [...dep, ...arr, normRwy(f.runway), normRwy(f.dep_runway), normRwy(f.arr_runway)];
+  order.forEach(r=>{ if(r && !list.includes(r)) list.push(r); });
+  const active = mode==="arr"
+    ? (normRwy(wxa.preferred_runway_ga_arriving) || arr[0] || normRwy(f.arr_runway) || "")
+    : (normRwy(wxa.preferred_runway_ga_departing) || dep[0] || normRwy(f.runway) || normRwy(f.dep_runway) || "");
   return {active, list};
 }
 // An airport object built only from SayIntentions, for fields MSFS loaded that aren't in any of our data.
-function buildLiveAirport(icao, f, wx){
+function buildLiveAirport(icao, f, wx, mode){
   const comms = (wx && wx.comms) || [], wxa = ((wx && wx.airports) || []).find(a=>a.airport===icao) || {};
-  const fq = mapComms(comms, icao), rw = siRunways(wxa, f), name = commsName(comms, icao) || icao;
+  const fq = mapComms(comms, icao), rw = siRunways(wxa, f, mode), name = commsName(comms, icao) || icao;
   return { id:icao, full:name, city:"", st:"", runways:rw.list, activeRwy:rw.active, name, source:"si", region:regionFromIdent(icao),
     atis:fq.atis||"", ctaf:fq.ctaf||"", clr:fq.clr||"", gnd:fq.gnd||"", twr:fq.twr||"", app:fq.app||"", dep:fq.dep||"", park:"the FBO" };
 }
@@ -679,25 +778,40 @@ function renderLive(st){
   if(cs && (cs.tail !== me.tail.toUpperCase() || (cs.type && cs.type !== me.type))){
     me.tail = cs.tail; if(cs.type) me.type = cs.type; store.set("me", me); renderMe();
   }
-  const wxa = ((st.wx && st.wx.airports) || []).find(a=>a.airport===icao) || {};
-  if(icao){
-    liveFreq[icao] = mapComms(st.wx && st.wx.comms, icao);     // SayIntentions' frequencies override the built-in ones
-    liveRwy[icao] = siRunways(wxa, f);                          // and so does its active runway
-    if(!BY.has(icao) && !BYW.has(icao)) liveAirports[icao] = buildLiveAirport(icao, f, st.wx);
-  }
+  const dst = (f.destination && f.destination !== icao) ? f.destination : "";
+  const wxFor = id => ((st.wx && st.wx.airports) || []).find(a=>a.airport===id) || {};
+  [[icao,"dep"],[dst,"arr"]].forEach(([id, mode])=>{
+    if(!id) return;
+    liveFreq[id] = mapComms(st.wx && st.wx.comms, id);          // SayIntentions' frequencies override the built-in ones
+    liveRwy[id] = siRunways(wxFor(id), f, mode);                // and so does its active runway (arriving one for the destination)
+    if(!BY.has(id) && !BYW.has(id)) liveAirports[id] = buildLiveAirport(id, f, st.wx, mode);
+  });
   const rwy = icao ? liveRwy[icao].active : "";
-  $("lv-status").textContent = `Live · ${f.callsign||""} at ${icao||"—"}${rwy?` · runway ${rwy}`:""}${aiOn?" · AI coach on":""}`;
+  $("lv-status").textContent = `Live · ${f.callsign||""} at ${icao||"—"}${dst?` → ${dst}`:""}${rwy?` · runway ${rwy}`:""}${aiOn?" · AI coach on":""}`;
   // Re-pick when the airport changes, or when SI's runway or frequencies change while the pilot is still on the setup screen.
-  const sig = icao ? JSON.stringify([icao, liveFreq[icao], liveRwy[icao], (liveAirports[icao]||{}).name]) : "";
+  const sig = icao ? JSON.stringify([icao, dst, liveFreq[icao], liveRwy[icao], liveFreq[dst], liveRwy[dst], (liveAirports[icao]||{}).name, (liveAirports[dst]||{}).name]) : "";
   if(icao && !flight && (icao !== liveAp || sig !== lastLiveSig)){
     const fresh = icao !== liveAp;
     liveAp = icao; lastLiveSig = sig; pick(icao);
     if(rwy && ![...$("f-rwy").options].some(o=>o.value===rwy)) $("f-rwy").insertAdjacentHTML("beforeend", `<option value="${esc(rwy)}">${esc(rwy)} · active now</option>`);
     if(rwy) $("f-rwy").value = rwy;
     if(fresh && f.pattern_direction) $("f-pat").value = f.pattern_direction.toLowerCase()==="right"?"right":"left";
+    // Flight plan from SayIntentions fills in the destination unless the pilot picked one by hand.
+    if(dst && !toManual){
+      // A filed destination means a departure, so switch off "Pattern laps" the first time we see it.
+      if(dst !== lastLiveDst && !DEPARTS($("f-flow").dataset.v)){ $("f-flow").dataset.v = towered(cur) ? "tdep" : "udep"; renderFlows(); }
+      pickTo(dst, false); const ar = liveRwy[dst].active; if(ar) $("t-rwy").value = ar;
+    }
+    else if(!dst && !toManual && toAp) clearTo(false);
+    lastLiveDst = dst;
   }
-  const letter = (String(wxa.atis||"").match(/information\s+([A-Za-z]+)/i)||[])[1];
-  if(letter && flight){ const L = letter[0].toUpperCase()+letter.slice(1).toLowerCase(); if(PHON[L[0]]===L && flight.atis!==L){ flight.atis=L; $("atis").value=L; renderStep(); } }
+  if(flight){
+    [[icao,0],[dst,1]].forEach(([id, leg])=>{
+      const letter = id ? (String(wxFor(id).atis||"").match(/information\s+([A-Za-z]+)/i)||[])[1] : "";
+      if(!letter) return; const L = letter[0].toUpperCase()+letter.slice(1).toLowerCase();
+      if(PHON[L[0]]===L && flight.atis[leg]!==L){ flight.atis[leg]=L; renderStep(); }
+    });
+  }
   const comms = st.comms || [];
   const atc = [...comms].reverse().find(c=>c.incoming_message);
   if(atc && atc.id !== lastAtcId){
