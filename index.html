@@ -622,7 +622,8 @@ function openEdit(id){
 }
 function renderMe(){
   $("m-tail").value = me.tail; $("m-type").value = me.type; $("m-student").checked = me.student;
-  $("m-preview").innerHTML = `You'll say <b>${fullCS()}</b>, then <b>${shortCS()}</b> once ATC shortens it.`;
+  const si = (LIVE && typeof lastSiCS === "string" && lastSiCS) ? `<br>SayIntentions calls you "${esc(lastSiCS)}". Your choice here wins${lastSiCS.toLowerCase().includes(me.type.toLowerCase()) ? "" : ", but ATC will still hear the sim's aircraft type"}.` : "";
+  $("m-preview").innerHTML = `You'll say <b>${fullCS()}</b>, then <b>${shortCS()}</b> once ATC shortens it.${si}`;
   $("who").textContent = `${me.tail.toUpperCase()} · ${me.type}`;
 }
 function renderLadder(){
@@ -828,6 +829,17 @@ function parseCallsign(raw){
   if(!/^[0-9][0-9A-Z]{0,4}$/.test(chars)) return null;
   return {tail: "N"+chars, type};
 }
+// SayIntentions' callsign seeds the tail and aircraft ONCE per distinct callsign. After that the pilot's own choice in
+// the Me tab wins, otherwise picking "Cirrus" would snap back to "Skyhawk" on the next 3-second poll.
+let lastSiCS = store.get("siCallsign", "");
+function siSeedMe(raw){
+  raw = String(raw||"");
+  const cs = parseCallsign(raw);
+  if(!cs || raw === lastSiCS) return false;
+  lastSiCS = raw; store.set("siCallsign", raw);
+  me.tail = cs.tail; if(cs.type) me.type = cs.type; store.set("me", me);
+  return true;
+}
 function callsignMissing(text){
   const t = text.toLowerCase(), body = tailBody().toLowerCase();
   const words = tailBody().slice(-3).split("").map(c=>sayChar(c).toLowerCase());
@@ -854,10 +866,7 @@ function renderLive(st){
   if(typeof st.paused === "boolean" && st.paused !== paused){ paused = st.paused; renderPause(); }
   if(st.mentor){ mentorCount = st.mentor; renderMentor(); }
   const f = st.flight || {}, icao = f.current_airport || f.origin || "";
-  const cs = parseCallsign(f.callsign);
-  if(cs && (cs.tail !== me.tail.toUpperCase() || (cs.type && cs.type !== me.type))){
-    me.tail = cs.tail; if(cs.type) me.type = cs.type; store.set("me", me); renderMe();
-  }
+  if(siSeedMe(f.callsign)) renderMe();
   const dst = (f.destination && f.destination !== icao) ? f.destination : "";
   const wxFor = id => ((st.wx && st.wx.airports) || []).find(a=>a.airport===id) || {};
   [[icao,"dep"],[dst,"arr"]].forEach(([id, mode])=>{

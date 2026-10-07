@@ -82,7 +82,9 @@ unless `toManual`, auto-fills To from `flight.destination`, switching the flow c
 
 ### flight.json quirks (seen live)
 - `callsign` and `callsign_icao` arrive in spoken form, e.g. `Skyhawk-One-Two-Three-Alpha-Zulu`. `parseCallsign()` in
-  index.html turns that into `{type:"Skyhawk", tail:"N123AZ"}`. Never copy the raw string into `me.tail`.
+  index.html turns that into `{type:"Skyhawk", tail:"N123AZ"}`. Never copy the raw string into `me.tail`. `siSeedMe()` applies it **once per distinct
+  callsign** (remembered in localStorage `cpr:siCallsign`); after that the pilot's choice in the Me tab wins. Before
+  this, picking "Cirrus" snapped back to "Skyhawk" on the next poll.
 - `flight_id` is at the top level of `flight_details`, not under `current_flight`.
 - `current_airport`, `runway`, and the `current_flight` origin and destination can be null or empty before a flight
   plan is filed.

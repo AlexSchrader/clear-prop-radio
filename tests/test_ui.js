@@ -196,4 +196,18 @@ eq(html1.includes("taxi via Foxtrot, Echo, Alpha") && html1.includes("<li>Runway
 eq(rbHTML("Squawk VFR, Cirrus Three Alpha Zulu."), '"Squawk VFR, Cirrus Three Alpha Zulu."', "rbHTML: under 3 items stays a sentence");
 reads.chunks = false; eq(rbHTML("Runway 5R, taxi via F, E, A, hold short runway 5R, Cirrus Three Alpha Zulu.").startsWith('"Runway five right, taxi via Foxtrot'), true, "rbHTML: chunks off -> one worded, capitalized sentence"); reads.chunks = true;
 eq(rbHTML('<b>x</b>, y, z'), '<ol class="rb-list"><li>&lt;b&gt;x&lt;/b&gt;</li><li>y</li><li class="cs">z</li></ol>', "rbHTML: escapes HTML");
+
+// ---- SI callsign seeds Me only once per distinct callsign ----
+var store = {get:(k,d)=>d, set:()=>{}};
+var lastSiCS = "";
+eval(grab("siSeedMe"));
+me = {tail:"N123AZ", type:"Cirrus", student:true};
+eq(siSeedMe("Skyhawk-One-Two-Three-Alpha-Zulu"), true, "seed: first SI callsign applies");
+eq(me.type, "Skyhawk", "seed: type from SI");
+me.type = "Cirrus";                                   // the pilot picks Cirrus in the Me tab
+eq(siSeedMe("Skyhawk-One-Two-Three-Alpha-Zulu"), false, "seed: same SI callsign on the next poll does nothing");
+eq(me.type, "Cirrus", "seed: pilot's Cirrus is kept (was reverting to Skyhawk)");
+eq(siSeedMe("Cirrus-Four-Five-Six-Kilo"), true, "seed: a new SI callsign applies again");
+eq(me.tail, "N456K", "seed: new tail from SI");
+eq(siSeedMe(""), false, "seed: empty callsign ignored");
 process.exit(fails?1:0);
