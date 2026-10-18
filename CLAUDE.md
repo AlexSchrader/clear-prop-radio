@@ -129,6 +129,32 @@ language). SI's `taxi_path` is lat/lon waypoints for its own ribbon, not taxiway
   is added to the dropdown marked "active now"; the setup card re-picks when SI's runway or frequencies change (not
   once a script has started). Worldwide offline search via `airports-world.json`. Non-US phraseology banner.
 
+## Debrief (grading what the pilot actually said)
+- **Bridge** keeps the full comms history per `flight_id` (`remember_comms`, persisted to `cpr_history.json`, git-ignored,
+  last 8 flights) and serves `GET /api/history` → `{flight_id, flight, comms}` sorted by `stamp_zulu`/id.
+  `/api/state.comms` stays the last 30.
+- **`canon(text)`** normalizes spoken radio English to the expected form: number words → digits (niner→9), phonetic words
+  → letters, "two thousand five hundred" → 2500, "one zero thousand" → 10000, digit runs joined ("one two one point niner"
+  → 121.9), "five right"/"5R"/"runway 5" → "05r"/"runway 05". Both sides of a comparison go through it.
+- **`readbackParts(atcText)`** (the old `readbackFor` body) returns the controller's items as strings; `readbackFor` just
+  joins them with the callsign. **`checksFor(part)`** turns an item into `{label, test(canonPilot)}` checks: Runway,
+  Taxiway X (one per taxiway), Hold short, Cleared for takeoff/to land, Line up and wait, Cross, Heading, Altitude,
+  Frequency (point optional), Squawk, Squawk VFR, Acknowledged. "Cleared out of the Class C" is deliberately NOT a
+  check. Every check captures its own values (a lazily-read shared `m` was a real bug).
+- **`gradeReadback(atc, pilot)`**: all checks (deduped by label) + Callsign (full or short) + wrong-aircraft-type flag.
+  **`gradeCall(pilot, {station, firstContact, wx})`** for calls the pilot starts: Addressed the station, Full callsign on
+  first contact, Said what you want, Said where you are (not for clearance), "student pilot" (if `me.student`, first
+  contact with tower/ground/approach/clearance), Gave the ATIS letter (only where `wx==="atis"`).
+- **`gradeFlight(comms, {wx})`** walks the comms in time order. SI notices (`SI_NOTICE`) are counted, not graded;
+  mentor/co-pilot/dispatcher/ramp-agent stations are skipped. A pilot transmission is a *readback* when it echoes an item
+  of the controller's last instruction (or says roger/wilco), came within 90 s of it (`secondsBetween`, null = ignore),
+  and does not open with the station name plus a request. Otherwise it is a *call*. Returns calls, notices, avg, top-3
+  misses.
+- **UI**: Live panel shows the grade under each of your calls (`.good`/`.warn` + chips). New **Debrief** tab lists the
+  flight (live via `/api/history`) and keeps the last 5 debriefs in localStorage `cpr:debriefs` for offline viewing.
+- Tests: canon, parts, gradeReadback (perfect taxi, missing hold short, missing callsign, spoken-number clearance, wrong
+  type, squawk VFR), gradeCall (first contact, short callsign flagged, ATIS/student), a 6-entry mock flight, time gaps.
+
 ## Easier reads (Me tab, localStorage `cpr:reads`, defaults words:on chunks:on big:off)
 - **Numbers as words**: `sayNums()` rewrites what the *pilot* says (call lines, readbacks, live readbacks) into spoken
   form: runways via `rwySay`, frequencies "one two one point niner", altitudes via `altWords` (2,500 → "two thousand

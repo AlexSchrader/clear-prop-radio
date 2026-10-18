@@ -5,6 +5,8 @@ import os
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import bridge
+bridge.HIST_FILE = __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "cpr_history_test.json"
+bridge.history.clear()
 calls = []
 class Mock(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -14,7 +16,7 @@ class Mock(BaseHTTPRequestHandler):
                     "current_flight": {"flight_id": 777, "flight_origin": "KTTA", "flight_destination": "KRDU"}}}
         else:
             calls.append((u.path.rsplit("/",1)[-1], q))
-            body = {"comm_history": []} if "getComms" in u.path else {"status": "OK"}
+            body = {"comm_history": [{"id": 11, "stamp_zulu": "10:00:00", "station_name": "Tower", "outgoing_message": "Tower, Cirrus one two three alpha zulu, ready to taxi", "incoming_message": "Cirrus 3AZ, runway 5R, taxi via A, hold short of runway 5R."}, {"id": 12, "stamp_zulu": "10:00:20", "station_name": "Tower", "outgoing_message": "Runway 5R via A, hold short 5R, Cirrus 3AZ"}]} if "getComms" in u.path else {"status": "OK"}
         d = json.dumps(body).encode(); self.send_response(200); self.end_headers(); self.wfile.write(d)
     def log_message(self, *a): pass
 srv = ThreadingHTTPServer(("127.0.0.1", 0), Mock); port = srv.server_address[1]
@@ -59,3 +61,10 @@ except urllib.error.HTTPError as e:
     ok(e.code == 404, "bridge.py not served (404)")
 wx = [c for c in calls if c[0] == "getWX"]
 ok(wx and wx[-1][1]["icao"] == "KTTA,KRDU" and wx[-1][1]["with_comms"] == "1", "getWX fetched for origin AND flight-plan destination in one call")
+h = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{ap}/api/history").read())
+ok(h["flight_id"] == "777" and [c["id"] for c in h["comms"]] == [11, 12], "/api/history returns the flight's comms in order")
+time.sleep(4.5)   # another poll with the same comms must not duplicate them
+h2 = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{ap}/api/history").read())
+ok(len(h2["comms"]) == 2, "/api/history dedupes by id across polls")
+ok(bridge.HIST_FILE.exists() and "777" in json.loads(bridge.HIST_FILE.read_text()), "history persisted to disk")
+bridge.HIST_FILE.unlink()

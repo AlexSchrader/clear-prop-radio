@@ -89,6 +89,14 @@ button{cursor:pointer}
 .live .rbk{font-size:22px;line-height:1.3;font-weight:600;color:var(--say);margin:6px 0}
 .live .mean{font-size:15px}
 .live .warn{margin-top:8px;color:#c2410c;font-weight:600}
+.live .good{margin-top:8px;color:#1f7a4d;font-weight:600}
+:root:not([data-theme="light"]) .live .good{color:#5fd39a}
+.chips.grade{margin:6px 0 0;gap:6px}
+.chips.grade .chip{padding:5px 10px;font-size:14px}
+.chips.grade .chip.ok{border-color:#2fa36b;color:#1f7a4d}
+.chips.grade .chip.miss{border-color:#d14343;color:#b32d2d;font-weight:600}
+:root:not([data-theme="light"]) .chips.grade .chip.ok{color:#5fd39a}
+:root:not([data-theme="light"]) .chips.grade .chip.miss{color:#ff8a80}
 :root:not([data-theme="light"]) .live .warn{color:#fbbf24}
 .hidden{display:none}
 .banner{margin:8px 0;padding:10px 12px;border-radius:10px;background:var(--soft);border-left:4px solid var(--say);font-size:14px;color:var(--ink)}
@@ -144,6 +152,7 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
     <button role="tab" data-tab="airports" aria-selected="false">Airports</button>
     <button role="tab" data-tab="me" aria-selected="false">Me</button>
     <button role="tab" data-tab="ladder" aria-selected="false">Ladder</button>
+    <button role="tab" data-tab="debrief" aria-selected="false">Debrief</button>
   </div>
 
   <section id="tab-fly">
@@ -243,6 +252,13 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
     <div class="ladder" id="ladder"></div>
     <h2>When it feels like a lot</h2>
     <p>"Say again" is always allowed. Plan the call, say it in your head, then key the mic. Pause the sim if you need to.</p>
+  </section>
+
+  <section id="tab-debrief" class="hidden">
+    <p class="sub">What you actually said on the radio, graded call by call: the items a controller listens for, and the ones you missed.</p>
+    <div class="atisbar" style="margin:0 0 10px"><button class="ghost" id="db-refresh">Refresh</button><select id="db-pick"></select></div>
+    <div id="db-sum"></div>
+    <div id="db-list"></div>
   </section>
 </div>
 
@@ -644,8 +660,9 @@ function renderLadder(){
 
 document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("[data-tab]").forEach(x=>x.setAttribute("aria-selected", x===b));
-  ["fly","airports","me","ladder"].forEach(t=>$("tab-"+t).classList.toggle("hidden", t!==b.dataset.tab));
+  ["fly","airports","me","ladder","debrief"].forEach(t=>$("tab-"+t).classList.toggle("hidden", t!==b.dataset.tab));
   $("dock").classList.toggle("hidden", !(b.dataset.tab==="fly" && flight));
+  if(b.dataset.tab==="debrief") showDebrief();
 });
 $("f-q").oninput = ()=>runSearch("f-q","f-res");
 $("f-res").onclick = e=>onResult(e, pick);
@@ -700,6 +717,8 @@ $("a-reset").onclick = ()=>{
 });
 $("m-type").onchange = $("m-type").oninput; $("m-student").onchange = $("m-student").oninput;
 ["words","chunks","big"].forEach(k=>$("m-"+k).onchange = ()=>setReads({[k]: $("m-"+k).checked}));
+$("db-refresh").onclick = ()=>renderDebriefPick();
+$("db-pick").onchange = ()=>renderDebriefPick();
 $("bigbtn").onclick = ()=>setReads({big: !reads.big});
 $("ladder").onchange = e=>{ const i=+e.target.dataset.rung; ladderDone = e.target.checked ? [...new Set([...ladderDone,i])] : ladderDone.filter(x=>x!==i); store.set("ladder",ladderDone); };
 
@@ -825,11 +844,13 @@ function buildLiveAirport(icao, f, wx, mode){
 const TWY = `(?:${Object.values(PHON).join("|")}|[A-Z][0-9]{0,2}(?![a-z]))`, TWY_LIST = `(${TWY}(?:,?\\s+(?:and\\s+)?${TWY})*)`;
 const ci = w => w.split("").map(c => /[a-z]/i.test(c) ? `[${c.toUpperCase()}${c.toLowerCase()}]` : c).join("");
 const idSay = x => x.length <= 3 ? x.toUpperCase() : x;
-function readbackFor(text){
-  const T = " " + text.replace(/\s+/g," ") + " ", parts = [];
+// The items a controller expects to hear back, as short strings ("Runway 5R, taxi via A, B", "hold short runway 5R", "squawk 4521").
+// Empty array = nothing to read back. "Squawk VFR" is the only special case.
+function readbackParts(text){
+  const T = " " + String(text||"").replace(/\s+/g," ") + " ", parts = [];
   const hasAction = /squawk \d|heading \d|climb|descend|maintain|hold short|cleared|taxi|cross runway|line up and wait|\d{3}\.\d/i;
-  if(/radar services? terminated/i.test(T)) return `Squawk VFR, ${shortCS()}.`;
-  if(!hasAction.test(T)) return "";
+  if(/radar services? terminated/i.test(T)) return ["Squawk VFR"];
+  if(!hasAction.test(T)) return [];
   // Taxi clearances come in several shapes; capture runway, route and destination from any of them.
   let m, rwy = "", via = "", dest = "";
   const RW = ci("runway"), TX = ci("taxi"), VIA = ci("via"), TO = ci("to");
@@ -859,9 +880,166 @@ function readbackFor(text){
   const fq = T.match(/(departure|tower|ground|approach|center|clearance)\D{0,25}?(\d{3}\.\d{1,3})/i);
   if(fq) parts.push(`${fq[1].toLowerCase()} ${fq[2]}`);
   const sq = T.match(/squawk\s+(\d{4})/i); if(sq) parts.push(`squawk ${sq[1]}`);
-  if(!parts.length) return `Roger, ${shortCS()}.`;
+  return parts.length ? parts : ["Roger"];
+}
+function readbackFor(text){
+  const parts = readbackParts(text);
+  if(!parts.length) return "";
   const out = parts.join(", ");
   return out.charAt(0).toUpperCase() + out.slice(1) + `, ${shortCS()}.`;
+}
+
+/* ===== Debrief: grade what the pilot actually said against what was expected ===== */
+const NUMWORD = {zero:"0",oh:"0",one:"1",two:"2",three:"3",tree:"3",four:"4",fower:"4",five:"5",fife:"5",six:"6",seven:"7",eight:"8",nine:"9",niner:"9"};
+const SI_NOTICE = /mic key held|no audio captured|check your microphone|not understood|didn't catch|could not understand/i;
+const ATC_STATION = /tower|ground|approach|departure|clearance|delivery|cent(er|re)|radio|traffic|unicom|ctaf|afis|flight service|fss|radar|control/i;
+// Normalize spoken radio English so "runway five right", "one two one point niner", "two thousand five hundred", "Alpha Bravo"
+// become "runway 05r", "121.9", "2500", "a b", the same form the expected items take.
+function canon(t){
+  const PH = {}; Object.entries(PHON).forEach(([c,w])=>PH[w.toLowerCase().replace(/-/g,"")]=c.toLowerCase()); Object.assign(PH, {alfa:"a", juliett:"j", xray:"x"});
+  let s = String(t||"").toLowerCase().replace(/[-,]/g," ").replace(/[^a-z0-9.\s]/g," ");
+  s = s.split(/\s+/).filter(Boolean).map(w=>NUMWORD[w]||PH[w]||((w==="point"||w==="decimal")?".":w)).join(" ");
+  const num = a => +a.replace(/\s/g,"");
+  s = s.replace(/\b((?:\d\s)*\d) thousand(?: ((?:\d\s)*\d) hundred)?\b/g, (m,a,b)=>String(num(a)*1000+(b?num(b)*100:0)));
+  s = s.replace(/\b((?:\d\s)*\d) hundred\b/g, (m,a)=>String(num(a)*100));
+  s = s.replace(/\b\d(?:\s\d)+\b/g, m=>m.replace(/\s/g,""));
+  s = s.replace(/(\d)\s*\.\s*(\d)/g, "$1.$2");
+  s = s.replace(/\b(\d{1,2})\s+(left|right|center|centre)\b/g, (m,n,sd)=>n.padStart(2,"0")+sd[0]);
+  s = s.replace(/\b(\d{1,2})([lrc])\b/g, (m,n,sd)=>n.padStart(2,"0")+sd);
+  s = s.replace(/\brunway\s+(\d{1,2})\b(?![lrc])/g, (m,n)=>"runway "+n.padStart(2,"0"));
+  return s.replace(/\s+/g," ").trim();
+}
+const wordRe = w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}\\b`);
+const tailRe = body => new RegExp(`\\b${canon(body).replace(/\s/g,"").split("").join("\\s?")}\\b`);
+// Checks for one expected readback item. Each check: {label, test(canonPilotText)}.
+function checksFor(part){
+  const ch = [], P = String(part), c = canon(P); let m;
+  const rwyId = x => canon("runway "+x).replace("runway ","");
+  // Each check captures its own values: `m` is reused below, so a closure must not read it later.
+  if((m = P.match(/\brunway (\w+)/i))){ const id = rwyId(m[1]), lab = m[1].toUpperCase(); ch.push({label:`Runway ${lab}`, test: t=>wordRe(id).test(t)}); }
+  if((m = P.match(/\bvia (.+?)(?:,\s*(?:hold|cross)|$)/i))){
+    m[1].split(/,\s*/).map(x=>x.trim()).filter(x=>/^[A-Za-z][0-9]{0,2}$|^[A-Z][a-z]+$/.test(x)).forEach(x=>ch.push({label:`Taxiway ${x.length<=3?x.toUpperCase():x}`, test: t=>wordRe(canon(x)).test(t)}));
+  }
+  if(/hold short/i.test(P)) ch.push({label:"Hold short", test: t=>/hold(ing)? short/.test(t)});
+  if(/cleared for takeoff/i.test(P)) ch.push({label:"Cleared for takeoff", test: t=>/cleared (for )?take ?off/.test(t)});
+  if(/cleared to land/i.test(P)) ch.push({label:"Cleared to land", test: t=>/cleared to land/.test(t)});
+  if(/line up and wait/i.test(P)) ch.push({label:"Line up and wait", test: t=>/line up and wait/.test(t)});
+  if(/^cross runway/i.test(P)) ch.push({label:"Cross", test: t=>/\bcross/.test(t)});
+  if((m = P.match(/heading (\d{3})/i))){ const h = m[1]; ch.push({label:`Heading ${h}`, test: t=>wordRe(h).test(t)}); }
+  if((m = P.match(/(?:maintain|below|above|descend|climb)\D*?([\d,]{3,6})/i))){ const n = m[1].replace(/,/g,""); ch.push({label:`Altitude ${m[1]}`, test: t=>wordRe(n).test(t)}); }
+  if((m = P.match(/(\d{3})\.(\d{1,3})/))){ const a = m[1], b = m[2]; ch.push({label:`Frequency ${a}.${b}`, test: t=>new RegExp(`\\b${a}\\.?${b}\\b`).test(t)}); }
+  if((m = P.match(/squawk (\d{4})/i))){ const sq = m[1]; ch.push({label:`Squawk ${sq}`, test: t=>wordRe(sq).test(t)}); }
+  if(/squawk vfr/i.test(P)) ch.push({label:"Squawk VFR", test: t=>/squawk vfr|1200/.test(t)});
+  if(/cleared out of the class/i.test(P)) return [];   // nice to say, but controllers don't require it read back
+  if(/special vfr/i.test(P)) ch.push({label:"Special VFR", test: t=>/special vfr/.test(t)});
+  if(/^roger$/i.test(P)) ch.push({label:"Acknowledged", test: t=>/roger|wilco|copy|affirm/.test(t)});
+  if(!ch.length){ const words = c.split(" ").filter(w=>w.length>=4); ch.push({label:P, test: t=>words.length ? words.filter(w=>wordRe(w).test(t)).length*2 >= words.length : true}); }
+  return ch;
+}
+const typeWords = ["cirrus","diamond","cessna","skyhawk","piper","archer","warrior","bonanza","mooney"];
+function callsignCheck(t, needFull){
+  const body = tailBody(), full = tailRe(body).test(t), short = tailRe(body.slice(-3)).test(t);
+  const typ = t.includes(me.type.toLowerCase()) || (me.type==="Skyhawk" && t.includes("cessna")) || (me.type==="Cessna" && t.includes("skyhawk"));
+  return needFull ? {label:"Full callsign (first contact)", test: ()=> full && typ} : {label:"Callsign", test: ()=> full || short};
+}
+// A readback: did the pilot say every item the controller gave?
+function gradeReadback(atcText, pilotText){
+  const t = canon(pilotText), items = [], seenLabel = new Set();
+  readbackParts(atcText).forEach(p=>checksFor(p).forEach(ch=>{ if(seenLabel.has(ch.label)) return; seenLabel.add(ch.label); items.push({label:ch.label, ok:!!ch.test(t)}); }));
+  const cs = callsignCheck(t, false); items.push({label:cs.label, ok:!!cs.test(t)});
+  const wrong = typeWords.find(x=>x!==me.type.toLowerCase() && wordRe(x).test(t) && !(me.type==="Skyhawk"&&x==="cessna") && !(me.type==="Cessna"&&x==="skyhawk"));
+  if(wrong) items.push({label:`Said "${wrong}" (you fly a ${me.type})`, ok:false});
+  return {kind:"readback", items, score: items.filter(i=>i.ok).length/items.length};
+}
+// A call the pilot starts: who, who you are, where, what you want, plus student/weather on first contact.
+function gradeCall(pilotText, ctx){
+  const t = canon(pilotText), items = [], st = String(ctx.station||"").toLowerCase();
+  const stWord = (st.match(ATC_STATION)||[])[0];
+  if(stWord) items.push({label:`Addressed ${ctx.station}`, ok: new RegExp(stWord.replace(/cent(er|re)/,"cent(er|re)")).test(t)});
+  const cs = callsignCheck(t, !!ctx.firstContact); items.push({label:cs.label, ok:!!cs.test(t)});
+  items.push({label:"Said what you want", ok:/request|ready|inbound|taxi|depart|holding short|landing|touch and go|full stop|pattern|remain|with you|flight following|clearance|take ?off|crosswind|downwind|base|final|clear of|closed traffic|go around|say again|unable|radio check/.test(t)});
+  if(!/clearance|delivery/.test(st)) items.push({label:"Said where you are", ok:/\bmiles?\b|at the|holding short|ramp|parking|fbo|downwind|base|final|crosswind|over\b|abeam|\d{3,5}\b|feet|on the ground|gate|midfield|short final/.test(t)});
+  if(me.student && ctx.firstContact && /tower|ground|approach|departure|clearance|delivery|cent/.test(st)) items.push({label:"Said \"student pilot\"", ok:/student pilot/.test(t)});
+  if(ctx.wx==="atis" && ctx.firstContact && /tower|ground|approach|clearance|delivery/.test(st)) items.push({label:"Gave the ATIS letter", ok:/information|with the weather|have the numbers|numbers/.test(t)});
+  const wrong = typeWords.find(x=>x!==me.type.toLowerCase() && wordRe(x).test(t) && !(me.type==="Skyhawk"&&x==="cessna") && !(me.type==="Cessna"&&x==="skyhawk"));
+  if(wrong) items.push({label:`Said "${wrong}" (you fly a ${me.type})`, ok:false});
+  return {kind:"call", items, score: items.filter(i=>i.ok).length/items.length};
+}
+// Walk a flight's comms in order. Each pilot transmission is graded as a readback of the controller's last instruction
+// when it echoes any of its items (or says roger/wilco), otherwise as a call the pilot initiated.
+function gradeFlight(comms, ctx){
+  ctx = ctx || {}; const out = {calls:[], notices:0, avg:0, misses:[]}, seen = new Set(); let lastAtc = null;
+  const order = [...(comms||[])].sort((a,b)=>String(a.stamp_zulu||"").localeCompare(String(b.stamp_zulu||"")) || (+a.id||0)-(+b.id||0));
+  order.forEach(c=>{
+    const said = c.outgoing_message_english || c.outgoing_message, station = c.station_name || "";
+    if(said){
+      if(SI_NOTICE.test(said)){ out.notices++; }
+      else if(!/mentor|co-?pilot|dispatcher|gsx|ground crew|ramp agent/i.test(station)){
+        const t = canon(said); let res;
+        // A readback echoes the controller's last instruction, soon after it. A call that opens with the station's name and
+        // asks for something ("Tower, Skyhawk 3AZ, holding short 11, ready for departure") is a new call even if it repeats a runway.
+        const opensWithStation = ATC_STATION.test(t.split(" ").slice(0,4).join(" ")) && /ready|request|inbound|with you|departing|taxi|clearance/.test(t);
+        const gap = lastAtc ? secondsBetween(lastAtc.when, c.stamp_zulu) : null;
+        const echoes = lastAtc && lastAtc.parts.length && !opensWithStation && (gap===null || gap <= 90)
+          && (/\broger\b|wilco|copy/.test(t) || lastAtc.parts.some(p=>checksFor(p).some(ch=>ch.test(t))));
+        if(echoes) res = gradeReadback(lastAtc.text, said);
+        else { res = gradeCall(said, {station, firstContact:!seen.has(station.toLowerCase()), wx:ctx.wx}); }
+        seen.add(station.toLowerCase());
+        out.calls.push({id:c.id, when:c.stamp_zulu||"", station, said, atc: echoes ? lastAtc.text : "", ...res});
+      }
+    }
+    const heard = c.incoming_message_english || c.incoming_message;
+    if(heard){ lastAtc = {text:heard, parts:readbackParts(heard), when:c.stamp_zulu}; if(c.station_name) seen.add(String(c.station_name).toLowerCase()); }
+  });
+  if(out.calls.length) out.avg = out.calls.reduce((a,x)=>a+x.score,0)/out.calls.length;
+  const miss = {}; out.calls.forEach(x=>x.items.filter(i=>!i.ok).forEach(i=>{ const k = i.label.replace(/ \(.*\)$/,"").replace(/^(Runway|Taxiway|Heading|Altitude|Frequency|Squawk) .*/,"$1"); miss[k]=(miss[k]||0)+1; }));
+  out.misses = Object.entries(miss).sort((a,b)=>b[1]-a[1]).slice(0,3);
+  return out;
+}
+// SI stamps look like "10:05:20" or "2026-10-07 16:00:12Z". Null when either can't be parsed.
+function secondsBetween(a, b){
+  const p = s => { const m = String(s||"").match(/(\d{1,2}):(\d{2}):(\d{2})/); return m ? (+m[1])*3600 + (+m[2])*60 + (+m[3]) : null; };
+  const x = p(a), y = p(b); if(x===null || y===null) return null;
+  let d = y - x; if(d < -43200) d += 86400; return Math.abs(d);
+}
+const pct = x => `${Math.round(x*100)}%`;
+function chipsHTML(items){ return `<div class="chips grade">${items.map(i=>`<span class="chip ${i.ok?"ok":"miss"}">${i.ok?"✓":"✗"} ${esc(i.label)}</span>`).join("")}</div>`; }
+function debriefHTML(d, title){
+  const sum = !d.calls.length
+    ? `<div class="apcard"><b>${esc(title)}</b><br><small>No transmissions from you yet${d.notices?`, and SayIntentions didn't hear you ${d.notices} time${d.notices>1?"s":""} (push-to-talk / microphone)`:""}.</small></div>`
+    : `<div class="apcard"><b>${esc(title)}</b> <span class="badge">${pct(d.avg)}</span><br><small>${d.calls.length} call${d.calls.length>1?"s":""} graded${d.notices?` · SI didn't hear you ${d.notices}×`:""}</small>
+       ${d.misses.length?`<p style="margin:8px 0 0"><b>Work on:</b> ${d.misses.map(([k,n])=>`${esc(k)} (${n}×)`).join(", ")}</p>`:`<p style="margin:8px 0 0">Nothing missed. Clean flight.</p>`}</div>`;
+  const list = d.calls.map((x,i)=>`<div class="apcard">
+      <div class="hint">${i+1}. ${esc(x.station||"Radio")}${x.when?` · ${esc(String(x.when).replace(/^\d{4}-\d{2}-\d{2}[T ]?/,""))}`:""} · ${x.kind==="readback"?"readback":"your call"} · ${pct(x.score)}</div>
+      ${x.atc?`<div class="atc"><div class="who">ATC said</div><p>“${esc(x.atc)}”</p></div>`:""}
+      <p class="say" style="font-size:18px;margin:6px 0">“${esc(x.said)}”</p>
+      ${chipsHTML(x.items)}</div>`).join("");
+  return sum + list;
+}
+let debriefs = store.get("debriefs", {});
+function saveDebrief(fid, f, d){
+  if(!fid || !d.calls.length) return;
+  debriefs[fid] = {when:new Date().toISOString().slice(0,16).replace("T"," "), from:f.origin||f.current_airport||"", to:f.destination||"", calls:d.calls, notices:d.notices, avg:d.avg, misses:d.misses};
+  const keys = Object.keys(debriefs); while(keys.length > 5) delete debriefs[keys.shift()];
+  store.set("debriefs", debriefs);
+}
+async function showDebrief(){
+  const pick = $("db-pick"), saved = Object.entries(debriefs).reverse();
+  pick.innerHTML = (LIVE?`<option value="">This flight (live)</option>`:"") + saved.map(([k,v])=>`<option value="${esc(k)}">${esc(v.when)} ${esc(v.from)}${v.to?" → "+esc(v.to):""} · ${pct(v.avg)}</option>`).join("");
+  if(!LIVE && !saved.length){ $("db-sum").innerHTML = `<div class="apcard">Debriefs come from live flights. Fly with the bridge running, then they're kept here.</div>`; $("db-list").innerHTML=""; return; }
+  await renderDebriefPick();
+}
+async function renderDebriefPick(){
+  const k = $("db-pick").value;
+  if(k){ const v = debriefs[k]; $("db-sum").innerHTML = debriefHTML(v, `${v.from}${v.to?" → "+v.to:""} · ${v.when}`); $("db-list").innerHTML = ""; $("db-sum").insertAdjacentHTML("beforeend", debriefHTML({...v, misses:[]}).split("</div>").slice(1).join("</div>")); return; }
+  $("db-sum").innerHTML = `<div class="apcard">Loading this flight…</div>`; $("db-list").innerHTML = "";
+  try{
+    const r = await fetch("/api/history",{cache:"no-store"}), h = await r.json();
+    const ap = cur ? apGet(cur.id) : null, d = gradeFlight(h.comms, {wx: ap ? ap.wx : ""});
+    saveDebrief(h.flight_id, h.flight||{}, d);
+    const f = h.flight||{}, title = `${f.origin||f.current_airport||"This flight"}${f.destination?" → "+f.destination:""}`;
+    $("db-sum").innerHTML = debriefHTML(d, title);
+  }catch(e){ $("db-sum").innerHTML = `<div class="apcard">Couldn't reach the bridge for this flight's history.</div>`; }
 }
 // SayIntentions sends the spoken callsign, e.g. "Skyhawk-One-Two-Three-Alpha-Zulu". Turn it into {type:"Skyhawk", tail:"N123AZ"}.
 function parseCallsign(raw){
@@ -993,9 +1171,13 @@ function renderLive(st){
       if(navigator.vibrate) navigator.vibrate([60,40,60]);
       return;
     }
-    if(callsignMissing(mine.outgoing_message)) w.push(`Add your callsign: "${shortCS()}".`);
-    const wt = wrongType(mine.outgoing_message); if(wt) w.push(`You said "${wt}", but you're flying a ${me.type}.`);
-    $("lv-me").innerHTML = w.length ? `<div class="warn">⚠️ Your last call: ${w.join(" ")}</div>` : "";
+    // Grade this call in context (the controller's last instruction, first contact with the station, the field's weather type).
+    const ap = cur ? apGet(cur.id) : null, g = gradeFlight(comms, {wx: ap ? ap.wx : ""}), res = g.calls.find(x=>String(x.id)===String(mine.id));
+    if(res){
+      const missed = res.items.filter(i=>!i.ok);
+      $("lv-me").innerHTML = `<div class="${missed.length?"warn":"good"}">${missed.length ? `⚠️ Your ${res.kind==="readback"?"readback":"call"}: ${pct(res.score)}. Missing: ${missed.map(i=>esc(i.label)).join(", ")}.` : `✓ Clean ${res.kind==="readback"?"readback":"call"}.`}</div>${chipsHTML(res.items)}`;
+      if(missed.length && navigator.vibrate) navigator.vibrate(60);
+    } else $("lv-me").innerHTML = "";
   }
 }
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));

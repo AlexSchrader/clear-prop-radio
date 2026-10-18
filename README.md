@@ -43,6 +43,13 @@ SayIntentions flight plan, with its active arriving runway preselected.
 To rebuild the data from OurAirports: `python tools/build_airports.py` (add `--update-index` to refresh the US list
 embedded in index.html).
 
+## Debrief: how you actually sounded
+Live mode grades every transmission you make. Right after a call, the Live panel shows what a controller listens for
+and what you missed ("Your readback: 83%. Missing: Hold short"). The **Debrief** tab shows the whole flight: each
+call, what ATC had said, your words, a checklist, and a score, plus the top three things to work on. It understands
+spoken numbers ("runway five right", "one two one point niner", "two thousand five hundred") so you're graded on
+content, not spelling. The last five debriefs are kept on the phone for review without the sim.
+
 ## Weather, letters, and taxi routes
 - The app only asks for an ATIS letter where the field has ATIS. AWOS fields get "with the weather"; fields with
   neither (many small towered airports outside the US) skip the phrase, and live mode shows SayIntentions' wind,

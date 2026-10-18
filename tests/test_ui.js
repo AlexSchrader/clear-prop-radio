@@ -11,6 +11,7 @@ eval(js.match(/const PHON = [^\n]+/)[0].replace("const ","var ")); eval(js.match
 eval(js.match(/const ci = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const TWY = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const idSay = [^\n]+/)[0].replace("const ","var "));
+eval(grab("readbackParts"));
 eval(grab("readbackFor")); eval(vf.replace("const ","var "));
 let fails = 0; const eq = (a,b,m)=>{ const p = a===b; if(!p) fails++; console.log((p?"PASS ":"FAIL ")+m+(p?"":`\n   got: ${a}\n  want: ${b}`)); };
 const C = ", Cirrus Three Alpha Zulu.";
@@ -266,4 +267,76 @@ eq(validIdent("UNICOM"), "", "icao: UNICOM is not an airport");
 mm = mapComms(nttb, "NTTB", "Bora Bora Airport");
 eq(mm.ctaf, undefined, "neighbours: Maupiti's AFIS is NOT taken as Bora Bora's CTAF once the name is known");
 eq(mapComms(nttb, "NTTB").ctaf, "118.3", "neighbours: without a name the fallback is still taken (limitation)");
+
+// ---- debrief: canon, checks, grading ----
+me = {tail:"N123AZ", type:"Skyhawk", student:true};
+eval(js.match(/const tailBody = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const NUMWORD = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const SI_NOTICE = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const ATC_STATION = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const wordRe = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const tailRe = [^\n]+/)[0].replace("const ","var "));
+eval(js.match(/const typeWords = [^\n]+/)[0].replace("const ","var "));
+eval(grab("secondsBetween")); eval(grab("canon")); eval(grab("checksFor")); eval(grab("callsignCheck")); eval(grab("gradeReadback")); eval(grab("gradeCall")); eval(grab("gradeFlight"));
+eq(canon("Runway five right, taxi via Alpha, Bravo, hold short runway five right"), "runway 05r taxi via a b hold short runway 05r", "canon: spoken runway/taxiways");
+eq(canon("departure one two five point three, squawk four five two one"), "departure 125.3 squawk 4521", "canon: frequency and squawk");
+eq(canon("climb and maintain two thousand five hundred"), "climb and maintain 2500", "canon: thousands and hundreds");
+eq(canon("maintain one zero thousand"), "maintain 10000", "canon: one zero thousand");
+eq(canon("Skyhawk One Two Three Alpha Zulu"), "skyhawk 123 a z", "canon: callsign");
+eq(canon("Runway 5R, taxi via A, B"), "runway 05r taxi via a b", "canon: digits form matches spoken form");
+eq(canon("heading two seven zero"), "heading 270", "canon: heading");
+eq(JSON.stringify(readbackParts("Radar contact.")), "[]", "parts: nothing to read back");
+eq(JSON.stringify(readbackParts("Skyhawk 3AZ, runway 11, taxi via Alpha, hold short of runway 11.")), '["Runway 11, taxi via Alpha","hold short runway 11"]', "parts: taxi");
+const atcTaxi = "Skyhawk 3AZ, runway 11, taxi via Alpha, Bravo, hold short of runway 11.";
+let g = gradeReadback(atcTaxi, "Runway one one, taxi via Alpha, Bravo, hold short runway one one, Skyhawk three alpha zulu");
+eq(g.score, 1, "readback: perfect taxi readback scores 100%");
+eq(g.items.map(i=>i.label).join("|"), "Runway 11|Taxiway Alpha|Taxiway Bravo|Hold short|Callsign", "readback: items listed");
+g = gradeReadback(atcTaxi, "Runway one one via alpha bravo, Skyhawk three alpha zulu");
+eq(g.items.find(i=>i.label==="Hold short").ok, false, "readback: missing hold short caught");
+eq(g.items.find(i=>i.label==="Taxiway Bravo").ok, true, "readback: taxiways without commas still found");
+g = gradeReadback(atcTaxi, "Runway 11, taxi via Alpha, Bravo, hold short runway 11.");
+eq(g.items.find(i=>i.label==="Callsign").ok, false, "readback: missing callsign caught");
+g = gradeReadback("Skyhawk 3AZ, cleared out of the Class C to the north, maintain at or below 2,500, departure 125.3, squawk 4521.",
+  "At or below two thousand five hundred, departure one two five point three, squawk four five two one, Skyhawk three alpha zulu");
+eq(g.score, 1, "readback: clearance with spoken numbers scores 100%");
+g = gradeReadback("Skyhawk 3AZ, runway 11, cleared for takeoff.", "Cleared for takeoff runway one one, Cirrus three alpha zulu");
+eq(g.items.some(i=>/Said "cirrus"/.test(i.label) && !i.ok), true, "readback: wrong aircraft type flagged");
+eq(g.items.find(i=>i.label==="Cleared for takeoff").ok, true, "readback: takeoff clearance echoed");
+g = gradeReadback("Skyhawk 3AZ, radar service terminated, squawk VFR, frequency change approved.", "Squawk VFR, Skyhawk three alpha zulu");
+eq(g.score, 1, "readback: squawk VFR");
+// pilot-initiated calls
+g = gradeCall("Bora Bora Tower, Skyhawk one two three alpha zulu, student pilot, at the ramp, ready to taxi, VFR to Raiatea", {station:"Bora Bora Tower", firstContact:true, wx:"none"});
+eq(g.score, 1, "call: complete first contact at a field with no ATIS");
+eq(g.items.some(i=>/ATIS/.test(i.label)), false, "call: no ATIS item where there is no ATIS");
+g = gradeCall("Tower, Skyhawk three alpha zulu, ready to taxi", {station:"Raleigh Tower", firstContact:true, wx:"atis"});
+eq(g.items.find(i=>i.label.startsWith("Full callsign")).ok, false, "call: short callsign on first contact flagged");
+eq(g.items.find(i=>i.label==="Gave the ATIS letter").ok, false, "call: missing ATIS letter flagged");
+eq(g.items.find(i=>i.label==='Said "student pilot"').ok, false, "call: missing student pilot flagged");
+g = gradeCall("Raleigh Tower, Skyhawk three alpha zulu, five miles south, inbound full stop", {station:"Raleigh Tower", firstContact:false, wx:"atis"});
+eq(g.score, 1, "call: later contact may use the short callsign, no ATIS/student needed");
+// a whole flight
+const conv = [
+  {id:1, stamp_zulu:"10:00:01", station_name:"Ramp", outgoing_message:"Mic key held for only 0.1 seconds. Hold PTT down while you speak."},
+  {id:2, stamp_zulu:"10:01:00", station_name:"Bora Bora Tower", outgoing_message:"Bora Bora Tower, Skyhawk one two three alpha zulu, student pilot, at the ramp, ready to taxi",
+     incoming_message:"Skyhawk 3AZ, Bora Bora Tower, runway 11, taxi via Alpha, hold short of runway 11."},
+  {id:3, stamp_zulu:"10:01:30", station_name:"Bora Bora Tower", outgoing_message:"Runway one one via alpha, Skyhawk three alpha zulu"},
+  {id:4, stamp_zulu:"10:05:00", station_name:"Bora Bora Tower", outgoing_message:"Bora Bora Tower, Skyhawk three alpha zulu, holding short runway one one, ready for departure",
+     incoming_message:"Skyhawk 3AZ, runway 11, wind 150 at 17, cleared for takeoff."},
+  {id:5, stamp_zulu:"10:05:20", station_name:"Bora Bora Tower", outgoing_message:"Cleared for takeoff runway one one, Skyhawk three alpha zulu"},
+  {id:6, stamp_zulu:"10:06:00", station_name:"Mentor", outgoing_message:"Read back: cleared for takeoff runway one one"}];
+const d = gradeFlight(conv, {wx:"none"});
+eq(d.notices, 1, "flight: SI notice counted, not graded");
+eq(d.calls.length, 4, "flight: four pilot calls graded (mentor ignored)");
+eq(d.calls.map(x=>x.kind).join(","), "call,readback,call,readback", "flight: calls vs readbacks detected");
+eq(d.calls[1].items.find(i=>i.label==="Hold short").ok, false, "flight: the missed hold short shows up");
+eq(d.calls[0].items.find(i=>i.label.startsWith("Full callsign")).ok, true, "flight: first contact had the full callsign");
+eq(d.calls[3].score, 1, "flight: clean takeoff readback");
+eq(d.misses[0][0], "Hold short", "flight: top miss is hold short");
+eq(d.avg > 0.8 && d.avg < 1, true, "flight: average between 80% and 100%");
+
+eq(secondsBetween("10:01:00","10:01:30"), 30, "time: gap in seconds");
+eq(secondsBetween("23:59:50","00:00:10"), 20, "time: midnight wrap");
+eq(secondsBetween("", "10:00:00"), null, "time: unknown stamp -> null");
+eq(gradeFlight([{id:1, station_name:"Tower", incoming_message:"Skyhawk 3AZ, runway 11, taxi via Alpha, hold short of runway 11."},
+                {id:2, station_name:"Tower", outgoing_message:"Runway one one via alpha, hold short one one, Skyhawk three alpha zulu"}], {}).calls[0].kind, "readback", "flight: no timestamps still detects a readback");
 process.exit(fails?1:0);

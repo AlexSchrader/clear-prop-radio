@@ -31,6 +31,30 @@ state = {"ok": False, "error": "Starting...", "flight": {}, "comms": [], "wx": {
          "paused": False, "mentor": {"used": 0, "cap": MENTOR_CAP}}
 lock = threading.Lock()
 coach_cache = {}
+# Full comms history per flight_id, for the Debrief tab. getCommsHistory only has recent entries, so we accumulate and
+# persist them next to this file (cpr_history.json, git-ignored) so a bridge restart mid-flight loses nothing.
+HIST_FILE = Path(__file__).with_name("cpr_history.json")
+try:
+    history = json.loads(HIST_FILE.read_text(encoding="utf-8")) if HIST_FILE.exists() else {}
+except Exception:
+    history = {}
+
+
+def remember_comms(fid, comms):
+    """Merge comms into history[fid] by id; keep the last 8 flights; write to disk when something changed."""
+    bucket = history.setdefault(fid, {})
+    before = len(bucket)
+    for c in comms:
+        cid = str(c.get("id"))
+        if cid and cid != "None":
+            bucket[cid] = c
+    while len(history) > 8:
+        del history[next(iter(history))]
+    if len(bucket) != before:
+        try:
+            HIST_FILE.write_text(json.dumps(history), encoding="utf-8")
+        except Exception as e:
+            print("[history]", e)
 session = {"api_key": "", "flight_id": ""}   # server-side only, never sent to the phone
 mentor_used = {}                             # flight_id -> count
 mentor_seen = set()                          # comm ids already spoken
@@ -64,9 +88,10 @@ def poll():
             flight.update(origin=cf.get("flight_origin"), destination=cf.get("flight_destination"),
                           dep_runway=cf.get("flight_plan_departing_runway"),
                           arr_runway=cf.get("flight_plan_arriving_runway"))
-            comms = []
+            comms, all_comms = [], []
             try:
-                comms = (sapi("getCommsHistory", api_key=key).get("comm_history") or [])[-30:]
+                all_comms = sapi("getCommsHistory", api_key=key).get("comm_history") or []
+                comms = all_comms[-30:]
             except Exception as e:
                 print("[comms]", e)
             icao = flight.get("current_airport") or flight.get("origin") or ""
@@ -82,6 +107,8 @@ def poll():
                       f"{flight.get('callsign')}-{flight.get('origin')}-{flight.get('destination')}")
             with lock:
                 session.update(api_key=key, flight_id=fid)
+                if all_comms:
+                    remember_comms(fid, all_comms)
                 state.update(ok=True, error="", flight=flight, comms=comms, wx=wx, updated=time.time(),
                              mentor={"used": mentor_used.get(fid, 0), "cap": MENTOR_CAP})
         except Exception as e:
@@ -196,6 +223,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/state"):
             with lock:
                 return self._send(200, {**state, "ai": bool(AI_KEY)})
+        if self.path.startswith("/api/history"):
+            with lock:
+                fid = session["flight_id"]
+                comms = sorted(history.get(fid, {}).values(), key=lambda c: (str(c.get("stamp_zulu") or ""), int(c.get("id") or 0)))
+                return self._send(200, {"flight_id": fid, "flight": state.get("flight", {}), "comms": comms})
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
