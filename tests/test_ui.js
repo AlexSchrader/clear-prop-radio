@@ -459,4 +459,24 @@ eq(secondsBetween("23:59:50","00:00:10"), 20, "time: midnight wrap");
 eq(secondsBetween("", "10:00:00"), null, "time: unknown stamp -> null");
 eq(gradeFlight([{id:1, station_name:"Tower", incoming_message:"Skyhawk 3AZ, runway 11, taxi via Alpha, hold short of runway 11."},
                 {id:2, station_name:"Tower", outgoing_message:"Runway one one via alpha, hold short one one, Skyhawk three alpha zulu"}], {}).calls[0].kind, "readback", "flight: no timestamps still detects a readback");
+// ---- auto-advance follows the real conversation ----
+eval(grab("atcKind")); eval(grab("autoStep"));
+eq(["Skyhawk 3AZ, runway two four, taxi via alpha, hold short runway two four.", "Runway 24, make left closed traffic, cleared for takeoff.", "Squawk four five two one, maintain VFR.",
+    "Contact Hickory Tower one two zero point one.", "Radar service terminated, squawk VFR, frequency change approved.", "Traffic 2 o'clock, 3 miles."].map(atcKind).join(" "),
+   "taxi takeoff squawk contact term ", "auto: ATC call kinds (spoken numbers too)");
+function run(steps, evs){ let i=0, pending=null; const seen=[]; for(const ev of evs){ const r = autoStep(steps, i, pending, ev); i=r.i; pending=r.pending; seen.push(steps[i].t); } return seen; }
+const P = t=>({kind:"pilot", text:t}), A = t=>({kind:"atc", text:t});
+steps = build({...base, ap:khky, flow:"tdep"});
+eq(run(steps, [P("Hickory Ground, Skyhawk one two three alpha zulu, at the FBO, ready to taxi"), A("Skyhawk 3AZ, runway 24, taxi via alpha, hold short runway 24."), P("Runway 24 via alpha, hold short 24, Skyhawk 3AZ"),
+               P("Hickory Tower, Skyhawk 123AZ, holding short runway 24, ready for departure"), A("Skyhawk 3AZ, runway 24, cleared for takeoff."), P("Cleared for takeoff 24, Skyhawk 3AZ"),
+               A("Skyhawk 3AZ, frequency change approved.")]).join(" > "),
+   "Taxi > Taxi > Ready at the runway > Ready at the runway > Ready at the runway > Leaving their airspace > Leaving their airspace", "auto: class D departure follows the conversation");
+steps = build({...base, ap:ktta, flow:"pattern"});
+eq(run(steps, [P("Raleigh Exec traffic, Skyhawk 123AZ, taxiing to runway 3"), P("Raleigh Exec traffic, Skyhawk 3AZ, departing runway 3, remaining in the pattern")]).join(" > "),
+   "Run-up > Crosswind", "auto: CTAF calls move on as soon as you make them");
+eq(run(steps, [P("uh, one moment"), A("Traffic 2 o'clock, 3 miles.")]).join(" > "), "Get the weather (AWOS) > Get the weather (AWOS)", "auto: chatter and traffic calls don't move the script");
+steps = build({...base, ap:khky, flow:"tarr"});
+eq(run(build({...base, ap:ktta, flow:"udep", to:khky}), [A("Runway 24, cleared to land.")])[0], "Get the weather (AWOS)", "auto: never jumps more than 3 steps ahead");
+eq(canon("Hold short runway two four."), "hold short runway 24", "canon: a full stop after a number word");
+eq(run(steps, [P("Hickory Tower, Skyhawk 123AZ, 10 miles south, inbound with Delta"), {kind:"atc", k:"land"}]).join(" > "), "Call Tower > Landing", "auto: SI's cleared-for-landing flag counts as the clearance");
 process.exit(fails?1:0);

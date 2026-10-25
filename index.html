@@ -83,7 +83,7 @@ button{cursor:pointer}
 .help summary{margin-top:10px;font-weight:600;cursor:pointer}
 .lights{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
 .lights th,.lights td{text-align:left;padding:5px 4px;border-bottom:1px solid var(--line);vertical-align:top}
-#helpbtn[aria-pressed="true"]{background:var(--btn);color:var(--btnText);border-color:var(--btn)}
+#autobtn[aria-pressed="true"],#helpbtn[aria-pressed="true"]{background:var(--btn);color:var(--btnText);border-color:var(--btn)}
 .land{margin:12px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 .land .chips{margin:8px 0 0}
 .land #w-find{margin-top:10px}
@@ -231,6 +231,7 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
       <div class="atisbar">
         <span class="hint" id="atis-for">ATIS letter</span><select id="atis"></select>
         <button class="ghost" id="bigbtn" aria-pressed="false" title="Cockpit text">Aa</button>
+        <button class="ghost hidden" id="autobtn" aria-pressed="true" title="Move the script along with the real radio calls">Auto</button>
         <button class="ghost" id="helpbtn" aria-pressed="false">Say again? Unable?</button>
         <button class="ghost" id="end">End flight</button>
       </div>
@@ -325,6 +326,7 @@ let toAp = null, toManual = false;             // destination picked on the setu
 let recent = store.get("recent", ["KTTA","KRDU"]);
 let me = store.get("me", {tail:"N123AZ", type:"Cirrus", student:true});
 let ladderDone = store.get("ladder", []);
+let autoOn = store.get("auto", true);   // live: move the script along with what ATC and you actually say
 let reads = Object.assign({words:true, chunks:true, big:false}, store.get("reads", {}));   // "easier reads" settings
 let cur = null, flight = null, step = 0, editId = null;
 
@@ -900,6 +902,8 @@ $("recent").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) pick(b.d
 $("t-q").oninput = ()=>runSearch("t-q","t-res");
 $("t-res").onclick = e=>onResult(e, id=>pickTo(id, true));
 $("t-back").onclick = ()=>{ if(cur) pickTo(cur.id, true); };
+function renderAuto(){ $("autobtn").classList.toggle("hidden", !LIVE); $("autobtn").setAttribute("aria-pressed", autoOn); }
+$("autobtn").onclick = ()=>{ autoOn = !autoOn; store.set("auto", autoOn); autoPending = null; renderAuto(); toast(autoOn ? "Auto: the script follows the real radio calls." : "Auto off: tap Next call yourself."); };
 $("helpbtn").onclick = ()=>{ const h = $("help"), open = h.classList.toggle("hidden") === false;
   $("helpbtn").setAttribute("aria-pressed", open); if(open){ renderHelp(build(flight)[step]); h.scrollIntoView({behavior:"smooth", block:"start"}); } };
 $("land-back").onclick = ()=>landAt(flight.ap);
@@ -918,11 +922,12 @@ $("start").onclick = ()=>{
   const kind = $("f-flow").dataset.v, ap = fromAp(), flow = flowFor(kind, ap), to = kind==="dep" ? destAp() : null;
   flight = {ap, flow, ff: kind==="dep" && $("f-ff").checked, rwy:$("f-rwy").value, dir:$("f-dir").value, pat:$("f-pat").value,
     alt:$("f-alt").value.trim(), dest:"", to, toRwy:$("t-rwy").value, toPat:$("t-pat").value, atis:["",""], last:false};
-  step = 0; $("atis").value="";
+  step = 0; autoPending = null; $("atis").value="";
   $("setup").classList.add("hidden"); $("flight").classList.remove("hidden"); $("dock").classList.remove("hidden");
   renderStep(); window.scrollTo(0,0);
 };
 $("next").onclick = ()=>{
+  autoPending = null;
   const n = build(flight).length;
   if(step < n-1){ step++; renderStep(); return; }
   if(PATTERNS(flight.flow) && !flight.last){
@@ -931,7 +936,7 @@ $("next").onclick = ()=>{
   }
   $("end").click();
 };
-$("back").onclick = ()=>{ step--; renderStep(); };
+$("back").onclick = ()=>{ step--; autoPending = null; renderStep(); };
 $("end").onclick = ()=>{ if(LIVE && flight && flight.to) bridgePost("/api/watch", {icao:""}); flight=null; $("flight").classList.add("hidden"); $("setup").classList.remove("hidden"); $("dock").classList.add("hidden"); };
 
 $("a-q").oninput = ()=>runSearch("a-q","a-res");
@@ -966,6 +971,8 @@ $("ladder").onchange = e=>{ const i=+e.target.dataset.rung; ladderDone = e.targe
 /* ===== LIVE: SayIntentions via local bridge ===== */
 const LIVE = location.protocol === "http:";
 let lastAtcId = null, lastMeId = null, liveAp = null, lastLiveSig = "", lastLiveDst = "", aiOn = false;
+let autoPending = null, lastFlags = {to:false, ld:false};
+const flagOn = v => !!v && v!=="0" && v!=="false";   // SI flags come as 1/0, "1"/"0" or booleans
 let liveSeeded = false, paused = false, mentorOn = store.get("mentor", false), mentorCount = {used:0, cap:30};
 let toastTimer = null;
 function toast(msg, err){
@@ -1140,13 +1147,50 @@ function readbackFor(text){
 
 /* ===== Debrief: grade what the pilot actually said against what was expected ===== */
 const NUMWORD = {zero:"0",oh:"0",one:"1",two:"2",three:"3",tree:"3",four:"4",fower:"4",five:"5",fife:"5",six:"6",seven:"7",eight:"8",nine:"9",niner:"9"};
+/* ===== Auto-advance: follow the real conversation through the script ===== */
+// What kind of instruction a controller line is. The steps' example ATC lines go through the same function, so a real call
+// can be matched to the step that expects it.
+function atcKind(t){
+  t = canon(t);
+  if(/cleared (for )?take ?off/.test(t)) return "takeoff";
+  if(/cleared to land|cleared (for )?(the )?(touch and go|option|stop and go|low approach)/.test(t)) return "land";
+  if(/radar service terminated|frequency change approved/.test(t)) return "term";
+  if(/squawk \d{4}/.test(t)) return "squawk";
+  if(/\btaxi\b|hold short/.test(t)) return "taxi";
+  if(/\benter (the )?(left|right)|report (midfield|downwind|base|final)|closed traffic/.test(t)) return "entry";
+  if(/radar contact/.test(t)) return "radar";
+  if(/\bcontact\b.*\d{3}\.?\d/.test(t)) return "contact";
+  if(/go ahead/.test(t)) return "ahead";
+  return "";
+}
+// One event -> where the script should be. Only ever moves forward, at most 3 steps, so it can't run away from the pilot.
+// pending = the step whose instruction still needs your readback.
+function autoStep(steps, i, pending, ev){
+  const last = steps.length-1, end = n => Math.min(last, i+n);
+  if(ev.kind==="atc"){
+    const k = ev.k || atcKind(ev.text); if(!k) return {i, pending};
+    for(let j=i;j<=end(3);j++){ const a = steps[j].atc; if(a && atcKind(a.says)===k) return {i:j, pending: /^Nothing/.test(a.rb) ? null : j}; }
+    return {i, pending};
+  }
+  if(ev.kind==="pilot"){
+    if(pending===i) return {i:end(1), pending:null};                     // that was your readback
+    // Otherwise it's a call: it belongs to the next step that has something to say.
+    for(let j=i;j<=end(2);j++){
+      const s = steps[j]; if(!s.say) continue;
+      if(s.atc) return new RegExp(`\\b${s.st}\\b`, "i").test(ev.text) ? {i:j, pending:null} : {i, pending};   // now wait for the answer
+      return /\btraffic\b/i.test(ev.text) ? {i:Math.min(last, j+1), pending:null} : {i, pending};          // CTAF: nobody answers
+    }
+  }
+  return {i, pending};
+}
 const SI_NOTICE = /mic key held|no audio captured|check your microphone|not understood|didn't catch|could not understand/i;
 const ATC_STATION = /tower|ground|approach|departure|clearance|delivery|cent(er|re)|radio|traffic|unicom|ctaf|afis|flight service|fss|radar|control/i;
 // Normalize spoken radio English so "runway five right", "one two one point niner", "two thousand five hundred", "Alpha Bravo"
 // become "runway 05r", "121.9", "2500", "a b", the same form the expected items take.
 function canon(t){
   const PH = {}; Object.entries(PHON).forEach(([c,w])=>PH[w.toLowerCase().replace(/-/g,"")]=c.toLowerCase()); Object.assign(PH, {alfa:"a", juliett:"j", xray:"x"});
-  let s = String(t||"").toLowerCase().replace(/[-,]/g," ").replace(/[^a-z0-9.\s]/g," ");
+  // A full stop ends a sentence ("...point one.") unless it's a decimal point between digits.
+  let s = String(t||"").toLowerCase().replace(/[-,]/g," ").replace(/[^a-z0-9.\s]/g," ").replace(/\.(?!\d)/g," ");
   s = s.split(/\s+/).filter(Boolean).map(w=>NUMWORD[w]||PH[w]||((w==="point"||w==="decimal")?".":w)).join(" ");
   const num = a => +a.replace(/\s/g,"");
   s = s.replace(/\b((?:\d\s)*\d) thousand(?: ((?:\d\s)*\d) hundred)?\b/g, (m,a,b)=>String(num(a)*1000+(b?num(b)*100:0)));
@@ -1420,6 +1464,20 @@ function renderLive(st){
   }
   const comms = st.comms || [];
   const atc = [...comms].reverse().find(c=>c.incoming_message);
+  const mine0 = [...comms].reverse().find(c=>c.outgoing_message);
+  if(flight && autoOn && liveSeeded){
+    // In one SI entry you speak first and ATC answers; across entries, the id order is the time order.
+    const evs = [];
+    if(mine0 && mine0.id !== lastMeId && !SI_NOTICE.test(mine0.outgoing_message)) evs.push({kind:"pilot", text:mine0.outgoing_message, o:[+mine0.id||0, 0]});
+    if(atc && atc.id !== lastAtcId) evs.push({kind:"atc", text:atc.incoming_message_english || atc.incoming_message, o:[+atc.id||0, 1]});
+    if(flagOn(f.cleared_for_takeoff) && !lastFlags.to) evs.push({kind:"atc", k:"takeoff", o:[Infinity, 2]});
+    if(flagOn(f.cleared_for_landing) && !lastFlags.ld) evs.push({kind:"atc", k:"land", o:[Infinity, 2]});
+    evs.sort((a,b)=>a.o[0]-b.o[0] || a.o[1]-b.o[1]);
+    const steps = build(flight), was = step;
+    evs.forEach(ev=>{ const r = autoStep(steps, step, autoPending, ev); step = r.i; autoPending = r.pending; });
+    if(step !== was){ renderStep(); toast(`Next: ${steps[step].t}`); }
+  }
+  lastFlags = {to: flagOn(f.cleared_for_takeoff), ld: flagOn(f.cleared_for_landing)};
   if(atc && atc.id !== lastAtcId){
     lastAtcId = atc.id;
     const heard = atc.incoming_message_english || atc.incoming_message;   // SI may be speaking the local language; parse the English
@@ -1458,7 +1516,7 @@ async function livePoll(){
 }
 if(LIVE){ $("live").classList.remove("hidden"); livePoll(); }
 
-renderMe(); renderRecent(); renderLadder(); applyReads();
+renderMe(); renderRecent(); renderLadder(); applyReads(); renderAuto();
 if(recent[0]) pick(recent[0]);
 // Offline support on GitHub Pages: cache the page and the worldwide airport file. Browsers only allow this over https.
 if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(()=>{});
