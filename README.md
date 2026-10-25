@@ -21,6 +21,31 @@ Your phone shows what ATC just said and **exactly what to read back**, pulled li
 - **Chunked readbacks**: one line per item (runway, taxiways, hold short, callsign) instead of one long sentence.
 - **Cockpit text**: bigger, higher-contrast text with the notes folded away. Tap "Aa" during a flight to toggle it.
 
+## Any kind of airport, any kind of flight
+- **Same three choices everywhere**: Pattern laps, Depart, Arrive. The script adapts to the field: CTAF self-announce
+  calls at a no-tower field; Ground and Tower at a small towered (Class D) field; Clearance, Ground, Tower and
+  Departure at a busy (Class B/C) one. A line under the buttons says what radio work to expect.
+- **Pattern work at a towered field**: closed traffic, "cleared touch and go", one downwind call per lap.
+- **Tower closed** (night or a part-time tower): tick it and the field is flown as CTAF on the tower frequency. In
+  live mode the app ticks it for you when SayIntentions runs the field without a tower.
+- **Busy airport** checkbox: the app guesses Class B/C vs D from the frequencies; override it if it's wrong.
+- **No destination needed**: leave "Landing at" empty, or tap **Coming back here** for a local flight. In the air,
+  the flight screen asks "Where will you land?": back to where you started, somewhere else (search any airport), or
+  not sure yet. Changing it on the way in is a diversion: the script jumps to the new airport's arrival.
+- **Flight following** (on Depart): ask Approach, handoffs, and being handed to your destination (or cancelling it).
+
+## Learn it, not just read it
+- **🔊 Read it to me**: the phone reads your call, ATC's line, or the readback out loud, at your speed (Me tab).
+  Uses the phone's own voice, so it's free.
+- **Practice mode** (flight screen): make each call out loud (or type it). The phone plays ATC's answer, you read
+  it back, and both are graded like a real flight. "Hide my lines" blurs the script so you work from memory.
+  Works offline, no sim needed.
+- **Say again? Unable?**: a card with the exact words for the moments students freeze: say again, unable, wilco vs
+  roger, traffic calls, stand by, corrections, progressive taxi, unsure of position, lost comms with the light-gun
+  signals, and mayday. Worded for whoever you're talking to right now.
+- **Trends** (Debrief tab): what you keep missing across your flights and practice days ("Hold short: missed 3 of
+  3 times"), each with a tip and the ladder rung that drills it.
+
 ## Fly a whole trip
 Pick **From**, choose Depart, then pick **To**. The script runs the departure, an en-route step that tunes the
 destination's weather, then the arrival there (tower or CTAF, picked automatically), with the radio display switching
@@ -64,6 +89,8 @@ These only show up on the phone page served by `bridge.py`. The GitHub Pages cop
 - **Pause / Resume**: a big button in the Live panel pauses the sim through SayIntentions.
 - **Tap-to-tune**: tap any frequency, either the big LCD number or the airport card list. It goes into **COM1
   standby**, and you press swap yourself.
+- **Auto** (flight bar, on by default): the script follows the real conversation. A taxi clearance jumps to the taxi
+  step, your readback moves you on, a CTAF call moves to the next leg. It only moves forward, at most three steps.
 - **Mentor mode** (Me tab, off by default): after each ATC call, your co-pilot says the readback over the intercom
   so you can repeat it. It runs up to 30 times per flight, and the Live panel shows "Mentor: 12/30 used".
 

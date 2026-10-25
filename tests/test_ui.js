@@ -497,4 +497,18 @@ eq(pg.items.every(x=>x.ok), true, "practice: CTAF call with name first and last"
 pg = practiceGrade(steps, ci0, "call", "Cirrus three alpha zulu departing runway three", "awos");
 eq(pg.items.filter(x=>!x.ok).length >= 2, true, "practice: CTAF call missing the airport name both ends is flagged");
 eq(scriptMatch("Hickory Tower, holding short runway 24", "hickory tower holding short runway two four"), 1, "practice: spoken numbers count as matches");
+// ---- debrief trends ----
+eval(grab("missKey")); eval(js.match(/const TREND_TIPS = [\s\S]*?\};\n/)[0].replace("const ","var ")); eval(grab("trends"));
+eq(["Runway 5R","Runway 24","Taxiway F","Squawk 4521","Squawk VFR","Close to the script (53%)","Addressed Ground","Said \"cessna\" (you fly a Cirrus)"].map(missKey).join("|"),
+   "Runway|Runway|Taxiways|Squawk code|Squawk VFR|Close to the script|Addressed the station|Right aircraft type", "trends: labels grouped by habit");
+const S = (when, src, items) => ({when, src, calls: items.map(x=>({items:x}))});
+const ok = l=>({label:l, ok:true}), no = l=>({label:l, ok:false});
+const tr = trends([S("2026-10-01","flight",[[ok("Runway 05R"), no("Hold short"), ok("Callsign")],[no("Squawk 4521"), ok("Callsign")]]),
+                   S("2026-10-02","practice",[[ok("Runway 24"), no("Hold short"), no("Callsign")]]),
+                   S("2026-10-03","flight",[[no("Runway 23"), no("Hold short"), ok("Callsign")]])]);
+eq(tr.rows[0].key+" "+tr.rows[0].missed+"/"+tr.rows[0].asked+" in "+tr.rows[0].inSessions, "Hold short 3/3 in 3", "trends: hold short missed every time comes first");
+eq(tr.rows[0].rung, 2, "trends: hold short points at the small towered airport rung");
+eq(tr.rows.some(r=>r.key==="Squawk code"), false, "trends: a single miss isn't a trend");
+eq(tr.rows.some(r=>r.key==="Callsign"), false, "trends: missed 1 of 4 isn't a trend");
+eq(tr.avgs.map(a=>Math.round(a.avg*100)).join(" "), "60 33 33", "trends: score per session in order");
 process.exit(fails?1:0);

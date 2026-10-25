@@ -74,6 +74,8 @@ button{cursor:pointer}
 #pracbtn[aria-pressed="true"]{background:var(--btn);color:var(--btnText);border-color:var(--btn)}
 #card.quiz .say:not(.none),#card.quiz .rb{filter:blur(7px);user-select:none}
 #card.quiz.peek .say,#card.quiz.peek .rb{filter:none}
+.trends{margin-bottom:12px}
+.trends .tr{padding:6px 0;border-top:1px solid var(--line)}
 .spk{border:0;background:transparent;font-size:20px;padding:0 4px;vertical-align:middle;cursor:pointer}
 .say.none{font-size:20px;color:var(--dim);font-weight:500}
 .do{padding:12px;border-radius:12px;background:var(--soft);margin-bottom:10px}
@@ -302,6 +304,7 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
 
   <section id="tab-debrief" class="hidden">
     <p class="sub">What you actually said on the radio, graded call by call: the items a controller listens for, and the ones you missed.</p>
+    <div id="db-trends"></div>
     <div class="atisbar" style="margin:0 0 10px"><button class="ghost" id="db-refresh">Refresh</button><select id="db-pick"></select></div>
     <div id="db-sum"></div>
     <div id="db-list"></div>
@@ -952,6 +955,8 @@ function pracSubmit(text){
   const steps = build(flight), s = steps[step]; text = String(text||"").trim(); if(!text) return;
   const ap = s.leg ? flight.to : flight.ap;
   prac.said = text; prac.res = practiceGrade(steps, step, prac.phase, text, ap.wx);
+  practiceLog.push({when:new Date().toISOString().slice(0,16).replace("T"," "), items:prac.res.items.map(i=>({label:i.label, ok:i.ok}))});
+  practiceLog = practiceLog.slice(-300); store.set("practice", practiceLog);
   renderPractice(s);
 }
 function pracListen(){
@@ -1434,6 +1439,67 @@ function debriefHTML(d, title){
   return sum + list;
 }
 let debriefs = store.get("debriefs", {});
+let practiceLog = store.get("practice", []);   // [{when:"YYYY-MM-DD HH:MM", items:[{label, ok}]}], last 300 practice answers
+/* ===== Trends: what you keep missing across flights and practice ===== */
+// "Runway 5R" and "Runway 24" are the same habit. Group the grader's labels by the habit they test.
+function missKey(label){
+  const L = String(label);
+  const rules = [[/^Runway /,"Runway"],[/^Taxiway /,"Taxiways"],[/^Hold short/,"Hold short"],[/^Frequency /,"Frequency"],[/^Squawk VFR/,"Squawk VFR"],[/^Squawk /,"Squawk code"],
+    [/^Altitude /,"Altitude"],[/^Heading /,"Heading"],[/^Addressed /,"Addressed the station"],[/^Full callsign/,"Full callsign on first contact"],[/^Callsign/,"Callsign"],
+    [/^Close to the script/,"Close to the script"],[/^Said "student pilot"/,"\"Student pilot\""],[/^Said "\w+" \(you fly/,"Right aircraft type"],
+    [/^(Left|Right) (downwind|base)/,"Pattern leg and side"],[/^Report /,"Report point"],[/^Cleared (touch|for the option|stop|low)/,"Touch and go / option"],
+    [/^Started with/,"CTAF: name first"],[/^Ended with/,"CTAF: name last"]];
+  for(const [re,k] of rules) if(re.test(L)) return k;
+  return L;
+}
+const TREND_TIPS = {
+  "Hold short":["Read back every hold short instruction. It's the one item controllers never let slide.", 2],
+  "Runway":["Every runway assignment gets read back, with the number.", 2],
+  "Taxiways":["Write the taxi route down as you hear it, then read it off your notes.", 2],
+  "Frequency":["Say the new frequency back before you switch. Set it in standby while you listen.", 3],
+  "Squawk code":["Read back the code, then set it. Write it down first if it's a new one.", 3],
+  "Altitude":["Altitudes always get read back: \"at or below two thousand five hundred\".", 3],
+  "Heading":["Headings get read back digit by digit: \"heading two seven zero\".", 3],
+  "Addressed the station":["Start every call with who you're calling: \"Hickory Ground\".", 0],
+  "Full callsign on first contact":["Full callsign on first contact with each new controller. Only shorten it after they do.", 0],
+  "Callsign":["End every readback with your callsign. Without it, they can't tell who answered.", 0],
+  "Said what you want":["Who you're calling, who you are, where you are, what you want. Every call.", 1],
+  "Said where you are":["Say where you are: \"at the FBO\", \"10 miles south\", \"left downwind\".", 1],
+  "\"Student pilot\"":["Say \"student pilot\" on first contact. Controllers give you more room.", 2],
+  "Gave the ATIS letter":["Listen to ATIS first and say \"with information Bravo\" on first contact.", 2],
+  "Close to the script":["Use practice mode with \"Hide my lines\" on until the words come without looking."],
+  "CTAF: name first":["CTAF calls start with \"<airport> traffic\" so everyone knows which field you mean.", 0],
+  "CTAF: name last":["…and end with the airport name again: pilots tuning in late catch it.", 0],
+  "Pattern leg and side":["Read back the pattern leg and side: \"right downwind runway two four\".", 2],
+  "Touch and go / option":["Read back what you're cleared for: \"cleared touch and go runway two four\".", 2],
+  "Right aircraft type":["Use the type you set in the Me tab, every time."]};
+// sessions: [{when, src:"flight"|"practice", calls:[{items:[{label, ok}]}]}] oldest first.
+function trends(sessions){
+  const by = {};
+  sessions.forEach((ses, si)=>ses.calls.forEach(c=>c.items.forEach(it=>{
+    const k = missKey(it.label), r = by[k] = by[k] || {key:k, asked:0, missed:0, sessions:new Set()};
+    r.asked++; if(!it.ok){ r.missed++; r.sessions.add(si); }
+  })));
+  const rows = Object.values(by).filter(r=>r.missed>=2 && r.missed/r.asked>=0.3)
+    .map(r=>({key:r.key, asked:r.asked, missed:r.missed, rate:r.missed/r.asked, inSessions:r.sessions.size, tip:(TREND_TIPS[r.key]||[])[0]||"", rung:(TREND_TIPS[r.key]||[])[1]}))
+    .sort((a,b)=>b.missed-a.missed || b.rate-a.rate).slice(0,5);
+  const avgs = sessions.map(s=>{ const items = s.calls.flatMap(c=>c.items); return {when:s.when, src:s.src, avg: items.length ? items.filter(i=>i.ok).length/items.length : 0}; });
+  return {rows, avgs};
+}
+function trendSessions(){
+  const flights = Object.values(debriefs).map(v=>({when:v.when, src:"flight", calls:v.calls||[]}));
+  const days = {}; practiceLog.forEach(p=>{ const d = p.when.slice(0,10); (days[d] = days[d] || {when:d, src:"practice", calls:[]}).calls.push({items:p.items}); });
+  return [...flights, ...Object.values(days)].sort((a,b)=>a.when.localeCompare(b.when));
+}
+function trendsHTML(){
+  const ses = trendSessions(); if(ses.length < 2) return "";
+  const t = trends(ses), RUNGS = ["Rung 1 (home-field pattern)","Rung 2 (out and back)","Rung 3 (small towered airport)","Rung 4 (big towered airport)","Rung 5 (cross-country)"];
+  const line = t.avgs.slice(-8).map(a=>`<span class="chip">${a.src==="practice"?"🎙":"✈"} ${pct(a.avg)}</span>`).join("");
+  return `<div class="apcard trends"><b>Your trends</b> <small>last ${ses.length} flights and practice days</small>
+    <div class="chips grade">${line}</div>
+    ${t.rows.length ? `<p class="hint" style="margin:8px 0 4px">What you keep missing:</p>${t.rows.map(r=>`<div class="tr"><b>${esc(r.key)}</b> <small>missed ${r.missed} of ${r.asked} times</small>${r.tip?`<br><span class="hint">${esc(r.tip)}${r.rung!==undefined?` Drill it: ${RUNGS[r.rung]}.`:""}</span>`:""}</div>`).join("")}`
+                    : `<p class="hint" style="margin:8px 0 0">No repeat misses. Nice.</p>`}</div>`;
+}
 function saveDebrief(fid, f, d){
   if(!fid || !d.calls.length) return;
   debriefs[fid] = {when:new Date().toISOString().slice(0,16).replace("T"," "), from:f.origin||f.current_airport||"", to:f.destination||"", calls:d.calls, notices:d.notices, avg:d.avg, misses:d.misses};
@@ -1443,7 +1509,8 @@ function saveDebrief(fid, f, d){
 async function showDebrief(){
   const pick = $("db-pick"), saved = Object.entries(debriefs).reverse();
   pick.innerHTML = (LIVE?`<option value="">This flight (live)</option>`:"") + saved.map(([k,v])=>`<option value="${esc(k)}">${esc(v.when)} ${esc(v.from)}${v.to?" → "+esc(v.to):""} · ${pct(v.avg)}</option>`).join("");
-  if(!LIVE && !saved.length){ $("db-sum").innerHTML = `<div class="apcard">Debriefs come from live flights. Fly with the bridge running, then they're kept here.</div>`; $("db-list").innerHTML=""; return; }
+  $("db-trends").innerHTML = trendsHTML();
+  if(!LIVE && !saved.length){ $("db-sum").innerHTML = `<div class="apcard">Debriefs come from live flights. Fly with the bridge running, then they're kept here. Practice mode answers count toward your trends too.</div>`; $("db-list").innerHTML=""; return; }
   await renderDebriefPick();
 }
 async function renderDebriefPick(){
@@ -1453,7 +1520,7 @@ async function renderDebriefPick(){
   try{
     const r = await fetch("/api/history",{cache:"no-store"}), h = await r.json();
     const ap = cur ? apGet(cur.id) : null, d = gradeFlight(h.comms, {wx: ap ? ap.wx : ""});
-    saveDebrief(h.flight_id, h.flight||{}, d);
+    saveDebrief(h.flight_id, h.flight||{}, d); $("db-trends").innerHTML = trendsHTML();
     const f = h.flight||{}, title = `${f.origin||f.current_airport||"This flight"}${f.destination?" → "+f.destination:""}`;
     $("db-sum").innerHTML = debriefHTML(d, title);
   }catch(e){ $("db-sum").innerHTML = `<div class="apcard">Couldn't reach the bridge for this flight's history.</div>`; }
