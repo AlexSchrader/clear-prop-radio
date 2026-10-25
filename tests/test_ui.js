@@ -128,7 +128,7 @@ for (const n of ["flowFor","PATTERNS","bigField","siNoTower"]) eval(js.match(new
 eval(js.match(/const OPP = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const looksLikeIdent = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const wxPhrase = [^\n]+/)[0].replace("const ","var "));
-eval(js.match(/const isBack = [^\n]+/)[0].replace("const ","var ")); eval(grab("legs")); eval(grab("retarget")); eval(grab("build")); eval(grab("buildLeg")); eval(grab("customToAp"));
+eval(js.match(/const isBack = [^\n]+/)[0].replace("const ","var ")); eval(grab("legs")); eval(grab("retarget")); eval(js.match(/const appName = [^\n]+/)[0].replace("const ","var ")); eval(grab("ffOut")); eval(grab("ffIn")); eval(grab("ffCancel")); eval(grab("build")); eval(grab("buildLeg")); eval(grab("customToAp"));
 const ktta = rowToAp(["KTTA","Raleigh Executive Jetport","Sanford","NC","P125.3|W120.625|D135.075|U123.075","03 21"], "db");
 const krdu2 = rowToAp(["KRDU","Raleigh-Durham International Airport","Raleigh/Durham","NC","P124.8|A123.8|D120.1|G121.7|T119.3|U122.95","05L 23R 05R 23L 14 32"], "db");
 // one leg, as before
@@ -253,6 +253,25 @@ eq(asCtaf(khky).ctaf, "122.8", "tower closed: SayIntentions' own CTAF beats the 
 liveFreq = {KHKY:{ctaf:"122.8", twr:"128.15"}};
 eq(asCtaf(khky).ctaf, "120.1", "tower closed by hand while SI still has a tower: tower frequency");
 liveFreq = {};
+// flight following
+steps = build({...base, ap:ktta, flow:"udep", dir:"north", ff:true, to:khky, toRwy:"24", atis:["","Delta"]});
+let T = steps.map(x=>x.t);
+eq(T.indexOf("Ask for flight following") > T.indexOf("Leaving the area") && T.indexOf("Your request") === T.indexOf("Ask for flight following")+1, true, "FF: asked after leaving the CTAF area");
+eq(steps.find(x=>x.t==="Ask for flight following").f, "125.3", "FF: on the origin's approach frequency");
+eq(steps.find(x=>x.t==="Your request").say.includes("request flight following to "+khky.name), true, "FF: request names the destination");
+eq(T.indexOf("Leaving flight following") === T.indexOf("Call Tower")-1, true, "FF: handed to tower at a Class D destination");
+eq(steps.find(x=>x.t==="Leaving flight following").atc.says.endsWith("Tower 120.1."), true, "FF: told to contact the tower frequency");
+eq(steps.filter(x=>x.leg===1).every(x=>x.ap==="KHKY") && steps.filter(x=>x.leg===0).every(x=>x.ap==="KTTA"), true, "FF: steps tagged with the right leg");
+steps = build({...base, ap:khky, flow:"tdep", ff:true, to:ktta, toRwy:"03"});
+eq(steps.find(x=>x.t==="Leaving flight following").atc.rb.startsWith("Squawk VFR"), true, "FF: CTAF destination gets radar service terminated");
+steps = build({...base, ap:krdu2, flow:"tdep", ff:true, to:null});
+T = steps.map(x=>x.t);
+eq(steps.find(x=>x.t==="Ask to leave").say.includes("with flight following"), true, "FF: Class C clearance asks for it");
+eq(T.includes("Leaving their airspace") || T.includes("Ask for flight following"), false, "FF: Class C departure keeps you (no radar terminated, no separate ask)");
+eq(T[T.length-1], "Ending flight following", "FF: no destination ends by cancelling");
+steps = build({...base, ap:ktta, flow:"udep", ff:true, to:krdu2, toRwy:"05L"});
+eq(steps.some(x=>x.t==="Checking in with Approach") && !steps.some(x=>x.t==="Call Approach"), true, "FF: Class C destination: check in with approach instead of a cold call");
+eq(build({...base, ap:ktta, flow:"pattern", ff:true}).some(x=>/flight following/i.test(x.t)), false, "FF: ignored for pattern laps");
 // help card
 eval(grab("helpLines"));
 const hT = helpLines("Tower", "Hickory", "Cirrus Three Alpha Zulu", "Cirrus One Two Three Alpha Zulu");

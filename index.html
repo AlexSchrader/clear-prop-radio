@@ -207,6 +207,7 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
           </div>
           <div class="ladder hidden" id="t-closed-wrap"><label><input type="checkbox" id="t-closed"><span><b>Tower there is closed</b> when you arrive<br><span class="hint">The arrival becomes CTAF calls on the tower frequency.</span></span></label></div>
         </div>
+        <div class="ladder hidden" id="f-ff-wrap"><label><input type="checkbox" id="f-ff"><span><b>Flight following</b> (radar traffic advisories)<br><span class="hint">Adds asking Approach for flight following, handoffs, and being handed to your destination. Good habit for any cross-country.</span></span></label></div>
         <button class="primary" id="start">Start radio script</button>
         <p class="hint">Pick the runway from ATIS. Not sure yet? Start anyway; step 1 tunes ATIS for you.</p>
       </div>
@@ -481,7 +482,7 @@ const OPP = {north:"south", northeast:"southwest", east:"west", southeast:"north
 const isBack = f => !!(f.to && f.to.id === f.ap.id);
 function legs(f){
   const back = isBack(f);
-  const dep = {leg:0, ap:f.ap, flow:f.flow, rwy:f.rwy, dir:f.dir, pat:f.pat, alt:f.alt, last:f.last, back,
+  const dep = {leg:0, ap:f.ap, flow:f.flow, rwy:f.rwy, dir:f.dir, pat:f.pat, alt:f.alt, last:f.last, back, ff:!!f.ff,
     atis:(f.atis||[])[0]||"", dest: f.to && !back ? f.to.name : (f.dest||"")};
   if(!f.to || !DEPARTS(f.flow)) return [dep];
   const arr = {leg:1, ap:f.to, flow: towered(f.to) ? "tarr" : "uarr", rwy:f.toRwy||"", dir: back ? f.dir : OPP[f.dir]||f.dir, pat:f.toPat||"left",
@@ -490,6 +491,8 @@ function legs(f){
 }
 function build(f){
   const L = legs(f); let s = buildLeg(L[0]);
+  const ff = !!f.ff && DEPARTS(f.flow);
+  if(ff) s = ffOut(s, L[0], L[1]);
   if(L.length>1){
     const to = L[1].ap, wx = to.wx==="atis" ? "ATIS" : to.wx==="awos" ? "AWOS" : towered(to) ? "Tower" : "CTAF";
     const exp = `Expect runway ${L[1].rwy ? rwySay(L[1].rwy) : "[check the weather]"}.`;
@@ -497,9 +500,63 @@ function build(f){
       do:`Do what you came for: maneuvers, sightseeing, the practice area. Heading back? About 20 miles out, tune ${to.name} ${wx} and listen while you fly. ${exp}`});
     else s.push({t:`En route to ${to.name}`, f: to.atis || to.twr || to.ctaf || "", st: wx, ap:to.id, leg:1, say:"",
       do:`Climb to ${f.alt||"your cruise altitude"}, lean, and set the heading. Halfway there, tune ${to.name} ${wx} and listen while you fly. Expect runway ${L[1].rwy ? rwySay(L[1].rwy) : "[check the weather]"}.`});
-    s = s.concat(buildLeg(L[1]));
+    s = s.concat(ff ? ffIn(buildLeg(L[1]), L[1]) : buildLeg(L[1]));
   }
+  else if(ff) s.push(ffCancel(L[0]));
   return s;
+}
+/* ===== Flight following: radar traffic advisories between airports, the PPL cross-country habit ===== */
+// Approach facilities are named after a city, not always the airport; when we don't know the frequency, leave a blank.
+const appName = ap => ap.app ? `${ap.name} Approach` : "[name] Approach";
+function ffOut(s, dep, arr){
+  const ap = dep.ap, F = fullCS(), S = shortCS(), D = dep.dir, alt = dep.alt || "[altitude]";
+  const where = arr ? (dep.back ? `, local flight, returning to ${ap.name}` : ` to ${arr.ap.name}`) : "";
+  const tag = x => ({...x, ap:ap.id, leg:0});
+  if(towered(ap) && bigField(ap)){
+    // Already talking to Departure: they keep you instead of terminating radar service.
+    const i = s.findIndex(x=>x.t==="Leaving their airspace"); if(i>=0) s.splice(i, 1);
+    s.push(tag({t:"Flight following: handoff", f:"", st:"Approach", say:`[name] Approach, ${F}, ${alt}.`,
+      atc:{says:"Contact Raleigh Approach 124.8.", rb:`Raleigh Approach 124.8, ${S}.`},
+      do:`Tell Clearance you want flight following${where} when you ask to leave, and Departure keeps you. Each time they hand you off, read back the new frequency, switch, and check in with just your callsign and altitude. The names and numbers above are examples.`}));
+    return s;
+  }
+  const f0 = ap.app || "";
+  s.push(tag({t:"Ask for flight following", f:f0, st:"Approach", say:`${appName(ap)}, ${F}, VFR request.`,
+    atc:{says:`${me.type} ${tailBody()}, ${appName(ap).replace("[name] ","")}, go ahead.`, rb:"Nothing to read back. Make your request next."},
+    do:`Once you're clear of ${towered(ap) ? "the tower's airspace" : "the pattern"} and climbing. ${f0 ? "" : "This field has no Approach frequency listed: find the one for your area on the sectional or in the Chart Supplement. "}Keep the first call short: they'll say "go ahead" when they're ready.`}));
+  s.push(tag({t:"Your request", f:f0, st:"Approach", say:`${F}, a ${me.type}, [__] miles ${D} of ${ap.name}, ${alt}, request flight following${where}.`,
+    atc:{says:"Squawk 4521, altimeter 30.02.", rb:`Squawk 4521, ${S}.`},
+    do:`Set the squawk and the altimeter. Wait for "radar contact" before you count on traffic calls. They may also give you a cruise altitude.`}));
+  s.push(tag({t:"Radar contact", f:f0, st:"Approach", say:"",
+    atc:{says:`Radar contact, 6 miles ${D} of ${ap.name}. Maintain VFR.`, rb:"Nothing to read back. You're on flight following."},
+    do:`From here: answer traffic calls with "looking", then "traffic in sight" or "negative contact". Tell them before you change altitude.`}));
+  s.push(tag({t:"Handed to the next controller", f:"", st:"Approach", say:`[name] Approach, ${F}, ${alt}.`,
+    atc:{says:"Contact Raleigh Approach 124.8.", rb:`Raleigh Approach 124.8, ${S}.`},
+    do:"Read back the new frequency, switch, and check in with just your callsign and altitude. It can happen several times on a long flight. The names and numbers above are examples."}));
+  return s;
+}
+// Arriving with flight following: you're already with Approach, so it hands you to the field instead of you calling cold.
+function ffIn(s, arr){
+  const ap = arr.ap, S = shortCS();
+  if(towered(ap) && bigField(ap) && ap.app){
+    const c = s.find(x=>x.t==="Call Approach");
+    if(c) Object.assign(c, {t:"Checking in with Approach", do:"The previous controller hands you to them: read back the frequency, switch, and make this call. You keep your squawk."});
+    return s;
+  }
+  const first = s.findIndex(x=>x.t==="Call Tower" || x.t==="Inbound, about 10 miles out");
+  if(first < 0) return s;
+  const twr = towered(ap);
+  s.splice(first, 0, {t:"Leaving flight following", f:"", st:"Approach", ap:ap.id, leg:arr.leg, say:"",
+    atc: twr ? {says:`${ap.name} at 12 o'clock, 12 miles. Contact ${ap.name} Tower ${ap.twr}.`, rb:`${ap.name} Tower ${ap.twr}, ${S}.`}
+             : {says:`${ap.name} at 12 o'clock, 12 miles. Radar service terminated, squawk VFR, frequency change approved.`, rb:`Squawk VFR, ${S}.`},
+    do: twr ? "Approach hands you straight to Tower: read it back, switch, and make the next call." : "Set 1200 on the transponder and switch to the CTAF. If they haven't let you go by 15 miles out, ask: \"request frequency change\"."});
+  return s;
+}
+function ffCancel(dep){
+  const S = shortCS();
+  return {t:"Ending flight following", f:"", st:"Approach", ap:dep.ap.id, leg:0, say:`[name] Approach, ${S}, cancel flight following.`,
+    atc:{says:"Radar service terminated, squawk VFR, frequency change approved.", rb:`Squawk VFR, ${S}.`},
+    do:"When you're done with the practice area or about to land somewhere without asking them. Set 1200 and switch."};
 }
 function buildLeg(f){
   const ap = f.ap, R = rwySay(f.rwy), P = f.pat, nm = ap.name, D = f.dir;
@@ -544,7 +601,7 @@ function buildLeg(f){
     do: ap.gnd ? "Tower will tell you to turn off and contact Ground. Read that back first, then switch." : "No Ground frequency here: stay with Tower once you're past the hold short line."};
   if(f.flow==="tdep"){
     s.push(atisStep);
-    if(big) s.push({t:"Ask to leave", f:ap.clr, st:"Clearance", say:`${nm} Clearance, ${F}${stu}, ${f.dest ? `VFR to ${f.dest}` : `VFR departure to the ${D}${f.back?", returning here":""}`}, requesting ${f.alt||"[altitude]"}${wxc}.`,
+    if(big) s.push({t:"Ask to leave", f:ap.clr, st:"Clearance", say:`${nm} Clearance, ${F}${stu}, ${f.dest ? `VFR to ${f.dest}` : `VFR departure to the ${D}${f.back?", returning here":""}`}, requesting ${f.alt||"[altitude]"}${f.ff?", with flight following":""}${wxc}.`,
       atc:{says:"Cleared out of the Class C to the "+D+", maintain at or below 2,500, departure 125.3, squawk 4521.", rb:`…at or below 2,500, departure 125.3, squawk 4521, ${S}.`},
       do:"Write down the numbers they give you. Set the squawk. If they say the weather is too low, ask for Special VFR."});
     s.push({t:"Taxi", f:gf, st:G, say:`${nm} ${G}, ${F}${stu}, at ${ap.park}${wxc}, ready to taxi${big?"":`, VFR departure to the ${D}`}.`,
@@ -767,6 +824,7 @@ function renderFlows(){
   $("f-flow").dataset.v = v;
   $("f-flow").innerHTML = KINDS.map(([k,l])=>`<button class="chip" data-v="${k}" aria-pressed="${k===v}">${l}</button>`).join("");
   $("f-to-wrap").classList.toggle("hidden", v!=="dep");
+  $("f-ff-wrap").classList.toggle("hidden", v!=="dep");
   $("f-closed-wrap").classList.toggle("hidden", !towered(cur));
   $("f-big-wrap").classList.toggle("hidden", !towered(fromAp()) || v==="pattern");
   $("f-note").textContent = flowNote(fromAp(), v);
@@ -858,7 +916,7 @@ $("start").onclick = ()=>{
   if(!cur) return;
   cur = apGet(cur.id) || cur; if(toAp) toAp = apGet(toAp.id) || toAp;
   const kind = $("f-flow").dataset.v, ap = fromAp(), flow = flowFor(kind, ap), to = kind==="dep" ? destAp() : null;
-  flight = {ap, flow, rwy:$("f-rwy").value, dir:$("f-dir").value, pat:$("f-pat").value,
+  flight = {ap, flow, ff: kind==="dep" && $("f-ff").checked, rwy:$("f-rwy").value, dir:$("f-dir").value, pat:$("f-pat").value,
     alt:$("f-alt").value.trim(), dest:"", to, toRwy:$("t-rwy").value, toPat:$("t-pat").value, atis:["",""], last:false};
   step = 0; $("atis").value="";
   $("setup").classList.add("hidden"); $("flight").classList.remove("hidden"); $("dock").classList.remove("hidden");
