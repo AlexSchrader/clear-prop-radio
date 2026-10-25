@@ -123,6 +123,7 @@ var fullCS = () => "Cirrus One Two Three Alpha Zulu";   // shortCS is stubbed ne
 eval(js.match(/const rwySay = r => \{[\s\S]*?\n\};/)[0].replace("const ","var "));
 eval(js.match(/const towered = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const DEPARTS = [^\n]+/)[0].replace("const ","var "));
+for (const n of ["flowFor","PATTERNS","asCtaf","bigField"]) eval(js.match(new RegExp(`const ${n} = [^\\n]+`))[0].replace("const ","var "));
 eval(js.match(/const OPP = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const looksLikeIdent = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const wxPhrase = [^\n]+/)[0].replace("const ","var "));
@@ -173,6 +174,60 @@ eq(customToAp("XYZ1", {}).name, "XYZ1", "custom: no name -> ident");
 eq(applyLive(c, null, {ctaf:"122.4", runways:["17","35"]}).runways.join(" "), "17 35", "custom: user runways apply");
 eq(looksLikeIdent("leap"), true, "custom: 'leap' offered as new airport");
 eq(looksLikeIdent("heathrow"), false, "custom: a word is not an ident");
+
+// ---- every airport type: same three choices, script adapts to the tower ----
+const khky = rowToAp(["KHKY","Hickory Regional Airport","Hickory","NC","A118.825|G121.85|T120.1|P124.65","06 24"], "db");  // Class D: tower + ground, no clearance
+const ktwo = rowToAp(["KTWO","Tower Only Field","Somewhere","NC","W119.025|T118.5","09 27"], "db");                       // tower, no ground, AWOS
+eq(["pattern","dep","arr"].map(k=>flowFor(k, khky)).join(" "), "tpat tdep tarr", "flows: towered field");
+eq(["pattern","dep","arr"].map(k=>flowFor(k, ktta)).join(" "), "pattern udep uarr", "flows: no tower");
+const base = {rwy:"24", dir:"north", pat:"left", alt:"3,500", dest:"", to:null, atis:["Delta",""], last:false};
+steps = build({...base, ap:khky, flow:"tdep"});
+eq(steps.some(x=>x.t==="Ask to leave"), false, "class D depart: no clearance delivery call");
+eq(steps.find(x=>x.t==="Taxi").say.includes("ready to taxi, VFR departure to the north"), true, "class D depart: ground hears where you're going");
+eq(steps.find(x=>x.t==="Taxi").f, "121.85", "class D depart: taxi on ground");
+eq(steps.some(x=>x.st==="Departure"), false, "class D depart: no departure controller");
+eq(steps[steps.length-1].say.includes("request frequency change") && steps[steps.length-1].f==="120.1", true, "class D depart: ends asking tower for the frequency change");
+eq(steps[steps.length-1].do.includes("124.65"), true, "class D depart: flight following hint names approach");
+steps = build({...base, ap:ktwo, flow:"tdep"});
+eq(steps.find(x=>x.t==="Taxi").f+"/"+steps.find(x=>x.t==="Taxi").st, "118.5/Tower", "tower-only: taxi call goes to tower");
+eq(steps.find(x=>x.t==="Taxi").say.includes("with the weather"), true, "tower-only: AWOS field says 'with the weather'");
+steps = build({...base, ap:khky, flow:"tarr", dir:"south"});
+eq(steps.some(x=>x.t==="Call Approach"), false, "class D arrive: no approach call");
+const ct = steps.find(x=>x.t==="Call Tower");
+eq(ct && ct.say.includes("student pilot, 10 miles south") && ct.say.includes("with information Delta"), true, "class D arrive: first call to tower has position, student, ATIS");
+eq(steps[steps.length-1].f, "121.85", "class D arrive: taxi in on ground");
+steps = build({...base, ap:ktwo, flow:"tarr"});
+eq(steps[steps.length-1].f+"/"+steps[steps.length-1].st, "118.5/Tower", "tower-only arrive: taxi in with tower");
+// busy-airport guess from real rows, and the pilot's override
+eq(bigField(rowToAp(["KHKY","Hickory","Hickory","NC","W118.325|D121.7|C128.15|G121.7|T128.15","06 24"],"db")), false, "busy guess: clearance = ground freq -> Class D");
+eq(bigField(rowToAp(["KVNY","Van Nuys","Van Nuys","CA","P120.4|A118.45|D126.6|C119.3|G121.7|T119.3|U122.95","16R 34L"],"db")), false, "busy guess: part-time tower CTAF -> Class D");
+eq(bigField(krdu2) && bigField(rowToAp(["KCLT","Charlotte","Charlotte","NC","P120.05|A121.15|D127.15|G121.8|T118.1|U122.95","18C"],"db")), true, "busy guess: KRDU, KCLT are busy");
+eq(build({...base, ap:{...khky, big:true}, flow:"tdep"}).some(x=>x.t==="Ask to leave"), true, "busy override: pilot can turn clearance calls on");
+eq(build({...base, ap:{...krdu2, big:false}, flow:"tdep"}).some(x=>x.t==="Ask to leave"), false, "busy override: and off");
+// towered pattern
+steps = build({...base, ap:khky, flow:"tpat"});
+eq(steps.find(x=>x.t==="Taxi").say.endsWith("closed traffic."), true, "tower pattern: ask for closed traffic");
+eq(steps.find(x=>x.t==="Ready at the runway").atc.says, "Runway 24, make left closed traffic, cleared for takeoff.", "tower pattern: takeoff example");
+eq(steps.findIndex(x=>x.lap) >= 0 && steps.find(x=>x.lap).t, "Downwind", "tower pattern: each lap starts at downwind");
+eq(steps.find(x=>x.lap).say.endsWith("touch and go."), true, "tower pattern: touch and go until the last lap");
+eq(steps[steps.length-1].t, "Climb out", "tower pattern: lap ends with climb out");
+steps = build({...base, ap:khky, flow:"tpat", last:true});
+eq(steps.find(x=>x.lap).atc.says, "Runway 24, cleared to land.", "tower pattern last lap: cleared to land");
+eq(steps[steps.length-1].t, "After landing", "tower pattern last lap: taxi back");
+eq(build({...base, ap:ktta, flow:"pattern"}).find(x=>x.lap).t, "Crosswind", "CTAF pattern: lap starts at crosswind");
+// tower closed: fly it as CTAF on the tower frequency
+const closed = asCtaf(khky);
+eq(towered(closed) + "/" + closed.ctaf + "/" + flowFor("pattern", closed), "false/120.1/pattern", "tower closed: CTAF on tower frequency");
+steps = build({...base, ap:closed, flow:"pattern"});
+eq(steps.find(x=>x.t==="Takeoff").f + "|" + steps.find(x=>x.t==="Takeoff").say.startsWith(khky.name+" traffic"), "120.1|true", "tower closed: self-announce on 120.1");
+// destination with a closed tower gets the CTAF arrival
+eq(legs({...base, ap:ktta, flow:"udep", to:asCtaf(khky)})[1].flow, "uarr", "tower closed at destination: CTAF arrival");
+eq(build({...base, ap:ktta, flow:"udep", to:ktwo}).find(x=>x.t.startsWith("En route")).st, "AWOS", "en route: AWOS destination labelled AWOS");
+// pattern readbacks
+eq(readbackFor("Runway 24, make left closed traffic, cleared for takeoff."), "Left closed traffic, cleared for takeoff runway 24"+C, "readback: closed traffic takeoff");
+eq(readbackFor("Runway 24, cleared touch and go."), "Cleared touch and go runway 24"+C, "readback: touch and go");
+eq(readbackFor("Cleared for the option, runway 6."), "Cleared for the option runway 6"+C, "readback: option");
+eq(readbackFor("Enter left downwind runway 24, report midfield."), "Left downwind runway 24, report midfield"+C, "readback: pattern entry + report");
 
 // ---- easier reads: numbers as words, chunked readbacks ----
 var reads = {words:true, chunks:true, big:false};
@@ -302,6 +357,12 @@ eq(g.score, 1, "readback: clearance with spoken numbers scores 100%");
 g = gradeReadback("Skyhawk 3AZ, runway 11, cleared for takeoff.", "Cleared for takeoff runway one one, Cirrus three alpha zulu");
 eq(g.items.some(i=>/Said "cirrus"/.test(i.label) && !i.ok), true, "readback: wrong aircraft type flagged");
 eq(g.items.find(i=>i.label==="Cleared for takeoff").ok, true, "readback: takeoff clearance echoed");
+g = gradeReadback("Skyhawk 3AZ, enter right downwind runway 24, report midfield.", "Right downwind runway two four, report midfield, Skyhawk three alpha zulu");
+eq(g.items.every(i=>i.ok), true, "grade: pattern entry read back");
+g = gradeReadback("Skyhawk 3AZ, enter right downwind runway 24, report midfield.", "Downwind two four, Skyhawk three alpha zulu");
+eq(g.items.filter(i=>!i.ok).map(i=>i.label).join("|"), "Right downwind|Report midfield", "grade: missing side and report flagged");
+g = gradeReadback("Skyhawk 3AZ, runway 24, cleared touch and go.", "Cleared touch and go two four, Skyhawk three alpha zulu");
+eq(g.items.every(i=>i.ok), true, "grade: touch and go");
 g = gradeReadback("Skyhawk 3AZ, radar service terminated, squawk VFR, frequency change approved.", "Squawk VFR, Skyhawk three alpha zulu");
 eq(g.score, 1, "readback: squawk VFR");
 // pilot-initiated calls

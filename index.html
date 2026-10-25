@@ -172,6 +172,9 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
       <div id="f-rest" class="hidden">
         <label class="hint">What are you doing?</label>
         <div class="chips" id="f-flow"></div>
+        <div class="ladder hidden" id="f-closed-wrap"><label><input type="checkbox" id="f-closed"><span><b>Tower is closed</b> (night, or a part-time tower)<br><span class="hint">Fly it as a no-tower field: announce yourself on CTAF, which is usually the tower frequency.</span></span></label></div>
+        <div class="ladder hidden" id="f-big-wrap"><label><input type="checkbox" id="f-big"><span><b>Busy airport</b> (Class B or C)<br><span class="hint">Adds Clearance Delivery before taxi and a Departure or Approach controller. Leave off for a small towered (Class D) field.</span></span></label></div>
+        <p class="hint" id="f-note"></p>
         <div class="row">
           <div class="field"><label for="f-rwy">Runway</label><select id="f-rwy"></select></div>
           <div class="field"><label for="f-dir">Direction</label>
@@ -189,6 +192,7 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
             <div class="field"><label for="t-rwy">Runway there</label><select id="t-rwy"></select></div>
             <div class="field"><label for="t-pat">Pattern there</label><select id="t-pat"><option value="left">Left traffic</option><option value="right">Right traffic</option></select></div>
           </div>
+          <div class="ladder hidden" id="t-closed-wrap"><label><input type="checkbox" id="t-closed"><span><b>Tower there is closed</b> when you arrive<br><span class="hint">The arrival becomes CTAF calls on the tower frequency.</span></span></label></div>
         </div>
         <button class="primary" id="start">Start radio script</button>
         <p class="hint">Pick the runway from ATIS. Not sure yet? Start anyway; step 1 tunes ATIS for you.</p>
@@ -421,10 +425,24 @@ function applyReads(){
 }
 function setReads(patch){ reads = Object.assign({}, reads, patch); store.set("reads", reads); applyReads(); if(flight) renderStep(); }
 
-const flows = ap => towered(ap)
-  ? [["tdep","Depart (tower)"],["tarr","Arrive (tower)"]]
-  : [["pattern","Pattern laps"],["udep","Depart"],["uarr","Arrive"]];
+// The same three choices at every airport. Whether a tower is open there decides which script you get.
+const KINDS = [["pattern","Pattern laps"],["dep","Depart"],["arr","Arrive"]];
+const flowFor = (kind, ap) => { const t = towered(ap); return kind==="pattern" ? (t?"tpat":"pattern") : kind==="arr" ? (t?"tarr":"uarr") : (t?"tdep":"udep"); };
 const DEPARTS = f => f==="tdep" || f==="udep";
+const PATTERNS = f => f==="pattern" || f==="tpat";
+// Night or a part-time tower: the field becomes a CTAF airport, and the CTAF is (almost always) the tower frequency.
+const asCtaf = ap => ({...ap, ctaf: ap.twr || ap.ctaf, twr:"", gnd:"", clr:"", towerClosed:true});
+// Busy (Class B/C) field: clearance and departure calls. The data has no airspace class, so guess: a real Clearance
+// Delivery frequency (not just Ground or Tower again) and no part-time-tower CTAF. The pilot can override it (ap.big).
+const bigField = ap => ap.big !== undefined ? !!ap.big : !!ap.clr && ap.clr!==ap.gnd && ap.clr!==ap.twr && ap.ctaf!==ap.twr;
+// One line on the setup screen saying what kind of radio work this will be.
+function flowNote(ap, kind){
+  if(!towered(ap)) return `No tower${ap.towerClosed?" tonight":""}: you announce every step on CTAF ${ap.ctaf||"122.9"} and nobody answers.${kind==="pattern"?" Crosswind, downwind, base, final, each lap.":""}`;
+  const g = ap.gnd ? "Ground, then Tower" : "Tower only (no Ground frequency)";
+  if(kind==="pattern") return `Towered pattern: ${g}. Ask for closed traffic, then one call per lap on downwind.`;
+  if(kind==="arr") return bigField(ap) && ap.app ? "Busy airport: Approach first, then Tower, then Ground." : `Tower about 10 miles out, then ${ap.gnd?"Ground after landing":"Tower to taxi in"}.`;
+  return bigField(ap) ? `Busy airport: Clearance, Ground, Tower, then Departure.` : `${g}. No clearance or departure calls; Tower approves the frequency change.`;
+}
 // "with information Bravo" only exists where there's ATIS. AWOS/ASOS fields: "with the weather". Fields with neither: say nothing about it.
 const wxPhrase = (ap, letter) => ap.wx==="atis" ? (letter ? `with information ${letter}` : "with information [letter]") : ap.wx==="awos" ? "with the weather" : "";
 const OPP = {north:"south", northeast:"southwest", east:"west", southeast:"northwest", south:"north", southwest:"northeast", west:"east", northwest:"southeast"};
@@ -440,8 +458,8 @@ function legs(f){
 function build(f){
   const L = legs(f); let s = buildLeg(L[0]);
   if(L.length>1){
-    const to = L[1].ap, wx = to.atis ? "ATIS" : "CTAF";
-    s.push({t:`En route to ${to.name}`, f: to.atis || to.ctaf || "", st: wx, ap:to.id, leg:1, say:"",
+    const to = L[1].ap, wx = to.wx==="atis" ? "ATIS" : to.wx==="awos" ? "AWOS" : towered(to) ? "Tower" : "CTAF";
+    s.push({t:`En route to ${to.name}`, f: to.atis || to.twr || to.ctaf || "", st: wx, ap:to.id, leg:1, say:"",
       do:`Climb to ${f.alt||"your cruise altitude"}, lean, and set the heading. Halfway there, tune ${to.name} ${wx} and listen while you fly. Expect runway ${L[1].rwy ? rwySay(L[1].rwy) : "[check the weather]"}.`});
     s = s.concat(buildLeg(L[1]));
   }
@@ -475,7 +493,7 @@ function buildLeg(f){
     }
     if(f.flow!=="udep"){
       if(f.flow==="pattern"){
-        s.push({t:"Crosswind", f:cf, st:"CTAF", say:`${T}, ${S}, ${P} crosswind runway ${R}, ${nm}.`, do:"First turn after takeoff, about 700 ft above the field."});
+        s.push({t:"Crosswind", lap:true, f:cf, st:"CTAF", say:`${T}, ${S}, ${P} crosswind runway ${R}, ${nm}.`, do:"First turn after takeoff, about 700 ft above the field."});
         s.push({t:"Downwind", f:cf, st:"CTAF", say:`${T}, ${S}, ${P} downwind runway ${R}, ${f.last?"full stop":"touch and go"}, ${nm}.`, do:"Parallel to the runway. Power back abeam the numbers."});
       }
       s.push({t:"Base", f:cf, st:"CTAF", say:`${T}, ${S}, ${P} base runway ${R}, ${nm}.`, do:"Turn toward the runway and descend."});
@@ -483,37 +501,68 @@ function buildLeg(f){
       s.push({t:"Clear of the runway", f:cf, st:"CTAF", say:`${T}, ${S}, clear of runway ${R}, taxiing to ${ap.park}, ${nm}.`, do:"Once fully past the hold short line."});
     }
   }
+  const G = ap.gnd ? "Ground" : "Tower", gf = ap.gnd || ap.twr, rw = f.rwy || "5R", big = bigField(ap);
+  const afterLanding = {t:"After landing", f:gf, st:G, say:`${nm} ${G}, ${F}, clear of runway ${R} at [taxiway], taxi to ${ap.park}.`,
+    atc:{says:"Taxi to the ramp via A, F.", rb:`Ramp via A, F, ${S}.`},
+    do: ap.gnd ? "Tower will tell you to turn off and contact Ground. Read that back first, then switch." : "No Ground frequency here: stay with Tower once you're past the hold short line."};
   if(f.flow==="tdep"){
     s.push(atisStep);
-    s.push({t:"Ask to leave", f:ap.clr||ap.gnd||ap.twr, st:ap.clr?"Clearance":ap.gnd?"Ground":"Tower", say:`${nm} ${ap.clr?"Clearance":ap.gnd?"Ground":"Tower"}, ${F}${stu}, VFR to ${f.dest||"[destination]"}, requesting ${f.alt||"[altitude]"}${wxc}.`,
+    if(big) s.push({t:"Ask to leave", f:ap.clr, st:"Clearance", say:`${nm} Clearance, ${F}${stu}, VFR to ${f.dest||"[destination]"}, requesting ${f.alt||"[altitude]"}${wxc}.`,
       atc:{says:"Cleared out of the Class C to the "+D+", maintain at or below 2,500, departure 125.3, squawk 4521.", rb:`…at or below 2,500, departure 125.3, squawk 4521, ${S}.`},
       do:"Write down the numbers they give you. Set the squawk. If they say the weather is too low, ask for Special VFR."});
-    s.push({t:"Taxi", f:ap.gnd||ap.twr, st:ap.gnd?"Ground":"Tower", say:`${nm} ${ap.gnd?"Ground":"Tower"}, ${F}${stu}, at ${ap.park}${wxc}, ready to taxi.`,
-      atc:{says:`Runway ${f.rwy||"5R"}, taxi via F, E, A, hold short runway ${f.rwy||"5R"}.`, rb:`Runway ${R}, taxi via F, E, A, hold short runway ${R}, ${S}.`},
+    s.push({t:"Taxi", f:gf, st:G, say:`${nm} ${G}, ${F}${stu}, at ${ap.park}${wxc}, ready to taxi${big?"":`, VFR departure to the ${D}`}.`,
+      atc:{says:`Runway ${rw}, taxi via F, E, A, hold short runway ${rw}.`, rb:`Runway ${R}, taxi via F, E, A, hold short runway ${R}, ${S}.`},
       do:`Read back the runway, every taxiway, and the hold short. The taxiways above are only an example: use the ones ${LIVE?"ATC gives you (they appear in the Live panel, and SayIntentions draws the route on the ground)":"ATC gives you"}. Taxi slowly.`});
-    s.push({t:"Ready at the runway", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}, holding short runway ${R}, ready for departure.`,
-      atc:{says:`Runway ${f.rwy||"5R"}, wind 050 at 10, cleared for takeoff.`, rb:`Cleared for takeoff runway ${R}, ${S}.`},
+    s.push({t:"Ready at the runway", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}, holding short runway ${R}, ready for departure${big?"":`, departing to the ${D}`}.`,
+      atc:{says:`Runway ${rw}, wind 050 at 10, cleared for takeoff.`, rb:`Cleared for takeoff runway ${R}, ${S}.`},
       do:"Stop before the yellow lines. Do the run-up before this call."});
-    s.push({t:"Handoff to Departure", f:ap.dep||ap.app, st:"Departure", say:`${nm} Departure, ${F}, ${f.alt?`climbing ${f.alt}`:"[altitude]"}.`,
-      atc:{says:"Radar contact.", rb:"Nothing to say. Keep flying."},
-      do:`When Tower says "contact departure", answer "Departure, ${S}", switch, then make this call.`});
-    s.push({t:"Leaving their airspace", f:ap.dep||ap.app, st:"Departure", say:"",
-      atc:{says:"Radar service terminated, squawk VFR, frequency change approved.", rb:`Squawk VFR, ${S}.`},
-      do:"Set the transponder to 1200 and switch to your next airport's ATIS."});
+    if(big){
+      s.push({t:"Handoff to Departure", f:ap.dep||ap.app, st:"Departure", say:`${nm} Departure, ${F}, ${f.alt?`climbing ${f.alt}`:"[altitude]"}.`,
+        atc:{says:"Radar contact.", rb:"Nothing to say. Keep flying."},
+        do:`When Tower says "contact departure", answer "Departure, ${S}", switch, then make this call.`});
+      s.push({t:"Leaving their airspace", f:ap.dep||ap.app, st:"Departure", say:"",
+        atc:{says:"Radar service terminated, squawk VFR, frequency change approved.", rb:`Squawk VFR, ${S}.`},
+        do:"Set the transponder to 1200 and switch to your next airport's ATIS."});
+    } else {
+      s.push({t:"Leaving their airspace", f:ap.twr, st:"Tower", say:`${nm} Tower, ${S}, leaving your airspace to the ${D}, request frequency change.`,
+        atc:{says:"Frequency change approved.", rb:`Frequency change approved, ${S}.`},
+        do:`About 5 miles out (Tower often approves it before you ask; then just say "${S}"). ${ap.app?`Want flight following? Call Approach on ${ap.app} next.`:"Then switch to your next frequency."}`});
+    }
+  }
+  if(f.flow==="tpat"){
+    const tg = f.last ? "full stop" : "touch and go", Pc = P.charAt(0).toUpperCase()+P.slice(1);
+    s.push(atisStep);
+    s.push({t:"Taxi", f:gf, st:G, say:`${nm} ${G}, ${F}${stu}, at ${ap.park}${wxc}, ready to taxi, closed traffic.`,
+      atc:{says:`Runway ${rw}, taxi via A, hold short runway ${rw}.`, rb:`Runway ${R}, taxi via A, hold short runway ${R}, ${S}.`},
+      do:"\"Closed traffic\" tells them you're staying in the pattern. The taxiway is only an example: read back the ones you're given."});
+    s.push({t:"Ready at the runway", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}, holding short runway ${R}, ready for departure, closed traffic.`,
+      atc:{says:`Runway ${rw}, make ${P} closed traffic, cleared for takeoff.`, rb:`${Pc} closed traffic, cleared for takeoff runway ${R}, ${S}.`},
+      do:"Run-up first. Don't roll until you hear \"cleared for takeoff\"."});
+    s.push({t:"Downwind", lap:true, f:ap.twr, st:"Tower", say:`${nm} Tower, ${S}, ${P} downwind runway ${R}, ${tg}.`,
+      atc: f.last ? {says:`Runway ${rw}, cleared to land.`, rb:`Cleared to land runway ${R}, ${S}.`}
+                  : {says:`Runway ${rw}, cleared touch and go.`, rb:`Cleared touch and go runway ${R}, ${S}.`},
+      do:"Abeam the tower or midfield. Tower may first say \"number two, follow the Cessna on base\": read back the number and look for that traffic. Still no clearance on short final? Ask, or go around."});
+    if(!f.last) s.push({t:"Climb out", f:ap.twr, st:"Tower", say:"",
+      do:"After the touch and go: climb straight out, turn crosswind about 700 ft above the field, then downwind. Tower may ask you to extend or make a short approach: read that back."});
+    else s.push(afterLanding);
   }
   if(f.flow==="tarr"){
     s.push({...atisStep, do:"About 25 miles out. Note the letter and pick it below."});
-    s.push({t:"Call Approach", f:ap.app, st:"Approach", say:`${nm} Approach, ${F}${stu}, ${"[__]"} miles ${D}, ${f.alt||"[altitude]"}, inbound for landing${wxc}.`,
-      atc:{says:"Squawk 4521, maintain VFR.", rb:`Squawk 4521, ${S}.`},
-      do:"About 20 miles out, before their airspace. Don't enter until they say your callsign back."});
-    s.push({t:"Handoff to Tower", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}, ${f.alt||"[altitude]"}, inbound for landing${wxc}.`,
-      atc:{says:`Enter ${P} downwind runway ${f.rwy||"5R"}, report midfield.`, rb:`${P} downwind runway ${R}, report midfield, ${S}.`},
-      do:`When Approach says "contact tower", read back the frequency, switch, then make this call.`});
-    s.push({t:"Landing", f:ap.twr, st:"Tower", say:"",
-      atc:{says:`Runway ${f.rwy||"5R"}, cleared to land.`, rb:`Cleared to land runway ${R}, ${S}.`}, do:"Don't land without hearing \"cleared to land\"."});
-    s.push({t:"After landing", f:ap.gnd, st:"Ground", say:`${nm} Ground, ${F}, clear of runway ${R} at [taxiway], taxi to ${ap.park}.`,
-      atc:{says:"Taxi to the ramp via A, F.", rb:`Ramp via A, F, ${S}.`},
-      do:"Tower will tell you to turn off and contact Ground. Read that back first, then switch."});
+    if(big && ap.app){
+      s.push({t:"Call Approach", f:ap.app, st:"Approach", say:`${nm} Approach, ${F}${stu}, ${"[__]"} miles ${D}, ${f.alt||"[altitude]"}, inbound for landing${wxc}.`,
+        atc:{says:"Squawk 4521, maintain VFR.", rb:`Squawk 4521, ${S}.`},
+        do:"About 20 miles out, before their airspace. Don't enter until they say your callsign back."});
+      s.push({t:"Handoff to Tower", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}, ${f.alt||"[altitude]"}, inbound for landing${wxc}.`,
+        atc:{says:`Enter ${P} downwind runway ${rw}, report midfield.`, rb:`${P} downwind runway ${R}, report midfield, ${S}.`},
+        do:`When Approach says "contact tower", read back the frequency, switch, then make this call.`});
+    } else {
+      s.push({t:"Call Tower", f:ap.twr, st:"Tower", say:`${nm} Tower, ${F}${stu}, 10 miles ${D}, ${f.alt||"[altitude]"}, inbound for landing${wxc}.`,
+        atc:{says:`Enter ${P} downwind runway ${rw}, report midfield.`, rb:`${P} downwind runway ${R}, report midfield, ${S}.`},
+        do:"About 10 miles out, before their airspace. You may enter once Tower says your callsign back. Descend to pattern altitude."});
+    }
+    s.push({t:"Landing", f:ap.twr, st:"Tower", say:`${nm} Tower, ${S}, midfield ${P} downwind runway ${R}.`,
+      atc:{says:`Runway ${rw}, cleared to land.`, rb:`Cleared to land runway ${R}, ${S}.`}, do:"Make the report Tower asked for. Don't land without hearing \"cleared to land\"."});
+    s.push(afterLanding);
   }
   s.forEach(x=>{ x.ap = ap.id; x.leg = f.leg||0; });
   return s;
@@ -543,7 +592,7 @@ function renderStep(){
     ${doBlock}</div>`;
   $("back").disabled = step===0;
   const last = step===steps.length-1;
-  if(flight.flow==="pattern" && last){ $("next").textContent = flight.last ? "Done" : "Another lap"; }
+  if(PATTERNS(flight.flow) && last){ $("next").textContent = flight.last ? "Done" : "Another lap"; }
   else { $("next").textContent = last ? "Done" : "Next call"; }
 }
 
@@ -572,10 +621,11 @@ function pickTo(id, manual){
   $("t-clear").onclick = ()=>clearTo(true);
   $("t-fix").onclick = ()=>{ document.querySelector('[data-tab="airports"]').click(); openEdit(a.id); };
   rwOpts(a, "t-rwy"); $("t-rest").classList.remove("hidden");
+  $("t-closed").checked = false; $("t-closed-wrap").classList.toggle("hidden", !towered(a));
 }
 function clearTo(manual){
   toAp = null; if(manual) toManual = true;
-  $("t-card").innerHTML = ""; $("t-rest").classList.add("hidden"); $("t-rwy").innerHTML = "";
+  $("t-card").innerHTML = ""; $("t-rest").classList.add("hidden"); $("t-rwy").innerHTML = ""; $("t-closed-wrap").classList.add("hidden");
 }
 // Offline "auto fill": an airport in no list becomes a local entry the pilot completes on the Airports tab.
 function addCustom(id){
@@ -597,19 +647,25 @@ function pick(id){
     ${cur.region==="ICAO" ? ICAO_BANNER : ""}
     <p class="hint" style="margin:8px 0 0">Wrong? <button class="ghost" id="fix">Fix this airport</button></p></div>`;
   $("fix").onclick = ()=>{ document.querySelector('[data-tab="airports"]').click(); openEdit(cur.id); };
-  rwOpts(cur); renderFlows(); renderRecent();
+  $("f-closed").checked = false; $("f-big").checked = bigField(cur); rwOpts(cur); renderFlows(); renderRecent();
   $("f-rest").classList.remove("hidden");
 }
 function renderRecent(){
   $("recent").innerHTML = recent.map(id=>`<button data-id="${id}">${id}</button>`).join("");
 }
 function renderFlows(){
-  const fl = flows(cur); let v = $("f-flow").dataset.v;
-  if(!fl.find(x=>x[0]===v)) v = fl[0][0];
+  let v = $("f-flow").dataset.v;
+  if(!KINDS.find(x=>x[0]===v)) v = KINDS[0][0];
   $("f-flow").dataset.v = v;
-  $("f-flow").innerHTML = fl.map(([k,l])=>`<button class="chip" data-v="${k}" aria-pressed="${k===v}">${l}</button>`).join("");
-  $("f-to-wrap").classList.toggle("hidden", !DEPARTS(v));
+  $("f-flow").innerHTML = KINDS.map(([k,l])=>`<button class="chip" data-v="${k}" aria-pressed="${k===v}">${l}</button>`).join("");
+  $("f-to-wrap").classList.toggle("hidden", v!=="dep");
+  $("f-closed-wrap").classList.toggle("hidden", !towered(cur));
+  $("f-big-wrap").classList.toggle("hidden", !towered(fromAp()) || v==="pattern");
+  $("f-note").textContent = flowNote(fromAp(), v);
 }
+// The airport as it will be flown: a closed tower turns it into a CTAF field.
+const fromAp = () => cur && ($("f-closed").checked && towered(cur) ? asCtaf(cur) : {...cur, big: $("f-big").checked});
+const destAp = () => toAp && ($("t-closed").checked && towered(toAp) ? asCtaf(toAp) : toAp);
 function resultsHTML(list, world, q){
   if(list.length) return list.map(r=>`<button data-id="${esc(r[0])}"><b>${esc(r[0])}</b> ${esc(r[1])}<br><small>${esc(r[2]||"")}, ${esc(r[3])}${world?" · worldwide":""}</small></button>`).join("");
   const id = (q||"").trim().toUpperCase();
@@ -670,13 +726,15 @@ $("recent").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) pick(b.d
 $("t-q").oninput = ()=>runSearch("t-q","t-res");
 $("t-res").onclick = e=>onResult(e, id=>pickTo(id, true));
 $("f-flow").onclick = e=>{ const v=e.target.dataset.v; if(!v) return; $("f-flow").dataset.v=v; renderFlows(); };
+$("f-closed").onchange = $("f-big").onchange = ()=>renderFlows();
 $("atis").innerHTML = `<option value="">—</option>` + Object.values(PHON).map(p=>`<option>${p}</option>`).join("");
 $("atis").onchange = ()=>{ const s = build(flight)[step]; flight.atis[s.leg||0] = $("atis").value; renderStep(); };
 
 $("start").onclick = ()=>{
   if(!cur) return;
-  const flow = $("f-flow").dataset.v, to = (toAp && DEPARTS(flow)) ? apGet(toAp.id) : null;
-  flight = {ap:apGet(cur.id), flow, rwy:$("f-rwy").value, dir:$("f-dir").value, pat:$("f-pat").value,
+  cur = apGet(cur.id) || cur; if(toAp) toAp = apGet(toAp.id) || toAp;
+  const kind = $("f-flow").dataset.v, ap = fromAp(), flow = flowFor(kind, ap), to = kind==="dep" ? destAp() : null;
+  flight = {ap, flow, rwy:$("f-rwy").value, dir:$("f-dir").value, pat:$("f-pat").value,
     alt:$("f-alt").value.trim(), dest:"", to, toRwy:$("t-rwy").value, toPat:$("t-pat").value, atis:["",""], last:false};
   step = 0; $("atis").value="";
   $("setup").classList.add("hidden"); $("flight").classList.remove("hidden"); $("dock").classList.remove("hidden");
@@ -685,9 +743,9 @@ $("start").onclick = ()=>{
 $("next").onclick = ()=>{
   const n = build(flight).length;
   if(step < n-1){ step++; renderStep(); return; }
-  if(flight.flow==="pattern" && !flight.last){
+  if(PATTERNS(flight.flow) && !flight.last){
     flight.last = confirm("Make the next lap your last (full stop)?");
-    step = build(flight).findIndex(s=>s.t==="Crosswind"); renderStep(); return;
+    step = build(flight).findIndex(s=>s.lap); renderStep(); return;
   }
   $("end").click();
 };
@@ -848,7 +906,7 @@ const idSay = x => x.length <= 3 ? x.toUpperCase() : x;
 // Empty array = nothing to read back. "Squawk VFR" is the only special case.
 function readbackParts(text){
   const T = " " + String(text||"").replace(/\s+/g," ") + " ", parts = [];
-  const hasAction = /squawk \d|heading \d|climb|descend|maintain|hold short|cleared|taxi|cross runway|line up and wait|\d{3}\.\d/i;
+  const hasAction = /squawk \d|heading \d|climb|descend|maintain|hold short|cleared|taxi|cross runway|line up and wait|closed traffic|enter (?:the )?(?:left|right)|\d{3}\.\d/i;
   if(/radar services? terminated/i.test(T)) return ["Squawk VFR"];
   if(!hasAction.test(T)) return [];
   // Taxi clearances come in several shapes; capture runway, route and destination from any of them.
@@ -862,6 +920,15 @@ function readbackParts(text){
   const viaSay = via ? via.replace(/\s+and\s+/g, ", ").replace(/\s*,\s*/g, ", ").replace(/(\S+)\s+(?=\S)/g, (x,w)=>w.endsWith(",")?x:w+", ").trim() : "";
   if(rwy) parts.push(`Runway ${rwy.toUpperCase()}${viaSay?`, taxi via ${viaSay}`:""}`);
   else if(dest) parts.push(`${dest.charAt(0).toUpperCase()+dest.slice(1)}${viaSay?` via ${viaSay}`:""}`);
+  // Pattern work at a towered field: entries, closed traffic, touch and go / option, and the report they ask for.
+  const ent = T.match(/enter (?:the )?(left|right) (downwind|base)(?: (?:for )?runway\s+(\w+))?/i);
+  if(ent) parts.push(`${ent[1].toLowerCase()} ${ent[2].toLowerCase()}${ent[3]?` runway ${ent[3].toUpperCase()}`:""}`);
+  const ct = T.match(/(left|right) closed traffic/i); if(ct) parts.push(`${ct[1].toLowerCase()} closed traffic`);
+  const TG = "(touch and go|option|stop and go|low approach)";
+  let tg = T.match(new RegExp(`runway\\s+(\\w+)\\b.*?cleared (?:for )?(?:the )?${TG}`, "i")), tgRw = tg && tg[1], tgK = tg && tg[2];
+  if(!tg && (tg = T.match(new RegExp(`cleared (?:for )?(?:the )?${TG},? runway\\s+(\\w+)`, "i")))){ tgK = tg[1]; tgRw = tg[2]; }
+  if(tg) parts.push(`cleared ${tgK.toLowerCase()==="option"?"for the option":tgK.toLowerCase()} runway ${tgRw.toUpperCase()}`);
+  const rep = T.match(/report (midfield(?: (?:left|right) downwind)?|(?:left |right )?(?:downwind|base)|(?:a )?\w+ mile final|final)/i); if(rep) parts.push(`report ${rep[1].toLowerCase()}`);
   const cross = T.match(/cross runway\s+(\w+)/i); if(cross) parts.push(`cross runway ${cross[1].toUpperCase()}`);
   const hs = T.match(/hold(?:ing)? short (?:of )?(runway|taxiway)\s+(\w+)/i); if(hs) parts.push(`hold short ${hs[1].toLowerCase()} ${idSay(hs[2])}`);
   const luaw = T.match(/runway\s+(\w+),?\s*line up and wait/i) || T.match(/line up and wait,?\s*runway\s+(\w+)/i);
@@ -923,6 +990,10 @@ function checksFor(part){
   if(/hold short/i.test(P)) ch.push({label:"Hold short", test: t=>/hold(ing)? short/.test(t)});
   if(/cleared for takeoff/i.test(P)) ch.push({label:"Cleared for takeoff", test: t=>/cleared (for )?take ?off/.test(t)});
   if(/cleared to land/i.test(P)) ch.push({label:"Cleared to land", test: t=>/cleared to land/.test(t)});
+  if(/closed traffic/i.test(P)) ch.push({label:"Closed traffic", test: t=>/closed traffic/.test(t)});
+  if((m = P.match(/cleared (touch and go|for the option|stop and go|low approach)/i))){ const k = m[1].toLowerCase(), w = k.replace("for the ",""); ch.push({label:`Cleared ${k}`, test: t=>t.includes(w)}); }
+  if((m = P.match(/^(left|right) (downwind|base)/i))){ const a = m[1].toLowerCase(), b = m[2].toLowerCase(); ch.push({label:`${a.charAt(0).toUpperCase()+a.slice(1)} ${b}`, test: t=>wordRe(a).test(t) && wordRe(b).test(t)}); }
+  if((m = P.match(/^report (.+)/i))){ const w = m[1].toLowerCase().split(" ").pop(); ch.push({label:`Report ${m[1].toLowerCase()}`, test: t=>wordRe(w).test(t)}); }
   if(/line up and wait/i.test(P)) ch.push({label:"Line up and wait", test: t=>/line up and wait/.test(t)});
   if(/^cross runway/i.test(P)) ch.push({label:"Cross", test: t=>/\bcross/.test(t)});
   if((m = P.match(/heading (\d{3})/i))){ const h = m[1]; ch.push({label:`Heading ${h}`, test: t=>wordRe(h).test(t)}); }
@@ -1135,7 +1206,7 @@ function renderLive(st){
     // Flight plan from SayIntentions fills in the destination unless the pilot picked one by hand.
     if(dst && !toManual){
       // A filed destination means a departure, so switch off "Pattern laps" the first time we see it.
-      if(dst !== lastLiveDst && !DEPARTS($("f-flow").dataset.v)){ $("f-flow").dataset.v = towered(cur) ? "tdep" : "udep"; renderFlows(); }
+      if(dst !== lastLiveDst && $("f-flow").dataset.v !== "dep"){ $("f-flow").dataset.v = "dep"; renderFlows(); }
       pickTo(dst, false); const ar = liveRwy[dst].active; if(ar) $("t-rwy").value = ar;
     }
     else if(!dst && !toManual && toAp) clearTo(false);

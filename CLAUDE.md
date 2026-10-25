@@ -40,6 +40,22 @@ indexed by leg, and the ATIS select edits the current step's leg. "Pattern laps"
 Setup fields: `toAp` (destination object), `t-rwy`, `t-pat`; `toManual` is true once the pilot picked or cleared To by
 hand, after which SayIntentions' flight plan no longer overrides it.
 
+## Towered and untowered airports (flowFor / bigField / asCtaf)
+The setup shows the same three chips everywhere (`KINDS`: Pattern laps, Depart, Arrive). `flowFor(kind, ap)` turns the
+choice into the concrete flow: `tpat`/`tdep`/`tarr` when `towered(ap)`, else `pattern`/`udep`/`uarr`.
+- **Tower closed** checkbox (From and To, shown only for towered fields): `asCtaf(ap)` clears twr/gnd/clr and sets the
+  CTAF to the tower frequency, so the CTAF scripts run unchanged.
+- **Busy airport** checkbox: `bigField(ap)` decides clearance and departure/approach calls. The data has no airspace
+  class, so the default is a guess: a Clearance freq that isn't Ground or Tower again, and no part-time-tower CTAF
+  (`ctaf === twr`). KRDU/KCLT are busy; KHKY (D = G) and KVNY (C = T) are Class D. `ap.big` overrides it.
+- Class D depart: Ground (or Tower if no Ground) with "VFR departure to the <dir>", Tower with direction, then "request
+  frequency change" (flight following hint if there's an Approach freq). Class D arrive: "Call Tower" 10 miles out.
+- `tpat` (towered pattern): taxi for closed traffic, "make left closed traffic, cleared for takeoff", one Downwind call
+  per lap ("cleared touch and go"/"cleared to land"), Climb out. A step with `lap:true` is where "Another lap" restarts.
+- `readbackParts` also handles pattern entries ("enter left downwind runway 24"), closed traffic, touch and go/option and
+  "report midfield"; `checksFor` grades them.
+- `flowNote()` puts one line under the chips saying what radio work to expect.
+
 ## Airports in no list (offline "auto fill")
 A search that matches nothing offers "Add XXXX as a new airport" (`looksLikeIdent`, 3-4 alphanumerics). That writes
 `custom[XXXX] = {full}` to localStorage `cpr:custom`; `customToAp()` builds a blank airport object (`source:"custom"`),
