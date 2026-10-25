@@ -127,7 +127,7 @@ for (const n of ["flowFor","PATTERNS","asCtaf","bigField"]) eval(js.match(new Re
 eval(js.match(/const OPP = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const looksLikeIdent = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const wxPhrase = [^\n]+/)[0].replace("const ","var "));
-eval(grab("legs")); eval(grab("build")); eval(grab("buildLeg")); eval(grab("customToAp"));
+eval(js.match(/const isBack = [^\n]+/)[0].replace("const ","var ")); eval(grab("legs")); eval(grab("retarget")); eval(grab("build")); eval(grab("buildLeg")); eval(grab("customToAp"));
 const ktta = rowToAp(["KTTA","Raleigh Executive Jetport","Sanford","NC","P125.3|W120.625|D135.075|U123.075","03 21"], "db");
 const krdu2 = rowToAp(["KRDU","Raleigh-Durham International Airport","Raleigh/Durham","NC","P124.8|A123.8|D120.1|G121.7|T119.3|U122.95","05L 23R 05R 23L 14 32"], "db");
 // one leg, as before
@@ -223,7 +223,25 @@ eq(steps.find(x=>x.t==="Takeoff").f + "|" + steps.find(x=>x.t==="Takeoff").say.s
 // destination with a closed tower gets the CTAF arrival
 eq(legs({...base, ap:ktta, flow:"udep", to:asCtaf(khky)})[1].flow, "uarr", "tower closed at destination: CTAF arrival");
 eq(build({...base, ap:ktta, flow:"udep", to:ktwo}).find(x=>x.t.startsWith("En route")).st, "AWOS", "en route: AWOS destination labelled AWOS");
-// pattern readbacks
+// no destination, or back to where you started, or decided in the air
+const loc = {...base, ap:khky, flow:"tdep", rwy:"24", dir:"west", to:khky, toRwy:"24", toPat:"left", atis:["Delta","Echo"]};
+const LL = legs(loc);
+eq(LL.length+"/"+LL[1].dir+"/"+LL[0].dest, "2/west/", "back here: two legs, inbound from where you went, no destination name");
+steps = build(loc);
+eq(steps.some(x=>x.t==="Out flying") && !steps.some(x=>x.t.startsWith("En route")), true, "back here: 'Out flying' instead of en route");
+eq(steps.find(x=>x.t==="Call Tower").say.includes("10 miles west") && steps.find(x=>x.t==="Call Tower").say.includes("information Echo"), true, "back here: tower call from the west with the new ATIS letter");
+eq(build({...base, ap:krdu2, flow:"tdep", dir:"east"}).find(x=>x.t==="Ask to leave").say.includes("VFR departure to the east, requesting"), true, "no destination: clearance asks for a VFR departure, no [destination]");
+eq(build({...loc, ap:krdu2, to:krdu2, dir:"east"}).find(x=>x.t==="Ask to leave").say.includes("VFR departure to the east, returning here"), true, "back here: clearance says returning");
+// choosing in the air
+let fl = {...base, ap:ktta, flow:"udep", rwy:"03", to:null, atis:["",""]};
+let at = build(fl).length-1;                                        // last departure step, no plan yet
+at = retarget(fl, ktta, at);
+eq(fl.to.id+"/"+fl.toRwy+"/"+build(fl)[at].leg, "KTTA/03/0", "in the air: 'back here' keeps your place and the runway you left on");
+eq(build(fl)[at+1].t, "Out flying", "in the air: next step is out flying");
+at = build(fl).findIndex(x=>x.t==="Entering downwind");          // on the way in, change your mind
+at = retarget(fl, khky, at);
+eq(build(fl)[at].t+"/"+fl.to.id, "En route to "+khky.name+"/KHKY", "diversion: jumps to en route for the new airport");
+eq(build(fl).filter(x=>x.leg===1).some(x=>x.t==="Call Tower"), true, "diversion: arrival rebuilt for a towered field");
 eq(readbackFor("Runway 24, make left closed traffic, cleared for takeoff."), "Left closed traffic, cleared for takeoff runway 24"+C, "readback: closed traffic takeoff");
 eq(readbackFor("Runway 24, cleared touch and go."), "Cleared touch and go runway 24"+C, "readback: touch and go");
 eq(readbackFor("Cleared for the option, runway 6."), "Cleared for the option runway 6"+C, "readback: option");

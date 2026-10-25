@@ -75,6 +75,9 @@ button{cursor:pointer}
 .dock .in{max-width:560px;margin:0 auto;display:grid;grid-template-columns:1fr 2fr;gap:10px}
 .dock button{padding:16px;border-radius:12px;font-weight:600;font-size:17px;border:1px solid var(--line);background:var(--panel)}
 .dock .next{background:var(--btn);color:var(--btnText);border-color:var(--btn)}
+.land{margin:12px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.land .chips{margin:8px 0 0}
+.land #w-find{margin-top:10px}
 .atisbar{display:flex;align-items:center;gap:8px;margin:10px 0 0;flex-wrap:wrap}
 .atisbar select{padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
 .ladder label{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-bottom:8px}
@@ -185,7 +188,8 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
           <div class="field"><label for="f-alt">Altitude</label><input id="f-alt" placeholder="3,500" autocomplete="off"></div>
         </div>
         <div id="f-to-wrap">
-          <div class="field"><label for="t-q">To (optional): the script continues with the arrival there</label><input id="t-q" placeholder="Code, name, or city" autocomplete="off" autocapitalize="characters"></div>
+          <div class="field"><label for="t-q">Landing at (optional). Don't know yet? Leave it empty and pick it in the air.</label><input id="t-q" placeholder="Code, name, or city" autocomplete="off" autocapitalize="characters"></div>
+          <div class="chips"><button class="chip" id="t-back">Coming back here</button></div>
           <div class="results hidden" id="t-res"></div>
           <div id="t-card"></div>
           <div class="row hidden" id="t-rest">
@@ -204,6 +208,16 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
       <div class="progress" id="prog"></div>
       <div id="fl-banner"></div>
       <div id="card"></div>
+      <div class="land hidden" id="land">
+        <span class="hint" id="land-now"></span>
+        <div class="chips">
+          <button class="chip" id="land-back"></button><button class="chip" id="land-else">Somewhere else…</button><button class="chip" id="land-none">Not sure yet</button>
+        </div>
+        <div id="w-find" class="hidden">
+          <div class="field"><label for="w-q">Land at</label><input id="w-q" placeholder="Code, name, or city" autocomplete="off" autocapitalize="characters"></div>
+          <div class="results hidden" id="w-res"></div>
+        </div>
+      </div>
       <div class="atisbar">
         <span class="hint" id="atis-for">ATIS letter</span><select id="atis"></select>
         <button class="ghost" id="bigbtn" aria-pressed="false" title="Cockpit text">Aa</button>
@@ -447,11 +461,14 @@ function flowNote(ap, kind){
 const wxPhrase = (ap, letter) => ap.wx==="atis" ? (letter ? `with information ${letter}` : "with information [letter]") : ap.wx==="awos" ? "with the weather" : "";
 const OPP = {north:"south", northeast:"southwest", east:"west", southeast:"northwest", south:"north", southwest:"northeast", west:"east", northwest:"southeast"};
 // A flight is one leg (what the app always did) or two: depart From, fly en route, arrive at To.
+// To may be the airport you left: a local flight out to the practice area and back, inbound from the side you went out.
+const isBack = f => !!(f.to && f.to.id === f.ap.id);
 function legs(f){
-  const dep = {leg:0, ap:f.ap, flow:f.flow, rwy:f.rwy, dir:f.dir, pat:f.pat, alt:f.alt, last:f.last,
-    atis:(f.atis||[])[0]||"", dest: f.to ? f.to.name : (f.dest||"")};
+  const back = isBack(f);
+  const dep = {leg:0, ap:f.ap, flow:f.flow, rwy:f.rwy, dir:f.dir, pat:f.pat, alt:f.alt, last:f.last, back,
+    atis:(f.atis||[])[0]||"", dest: f.to && !back ? f.to.name : (f.dest||"")};
   if(!f.to || !DEPARTS(f.flow)) return [dep];
-  const arr = {leg:1, ap:f.to, flow: towered(f.to) ? "tarr" : "uarr", rwy:f.toRwy||"", dir: OPP[f.dir]||f.dir, pat:f.toPat||"left",
+  const arr = {leg:1, ap:f.to, flow: towered(f.to) ? "tarr" : "uarr", rwy:f.toRwy||"", dir: back ? f.dir : OPP[f.dir]||f.dir, pat:f.toPat||"left",
     alt:f.alt, last:true, atis:(f.atis||[])[1]||"", dest:""};
   return [dep, arr];
 }
@@ -459,7 +476,10 @@ function build(f){
   const L = legs(f); let s = buildLeg(L[0]);
   if(L.length>1){
     const to = L[1].ap, wx = to.wx==="atis" ? "ATIS" : to.wx==="awos" ? "AWOS" : towered(to) ? "Tower" : "CTAF";
-    s.push({t:`En route to ${to.name}`, f: to.atis || to.twr || to.ctaf || "", st: wx, ap:to.id, leg:1, say:"",
+    const exp = `Expect runway ${L[1].rwy ? rwySay(L[1].rwy) : "[check the weather]"}.`;
+    if(L[0].back) s.push({t:"Out flying", f: to.atis || to.twr || to.ctaf || "", st: wx, ap:to.id, leg:1, say:"",
+      do:`Do what you came for: maneuvers, sightseeing, the practice area. Heading back? About 20 miles out, tune ${to.name} ${wx} and listen while you fly. ${exp}`});
+    else s.push({t:`En route to ${to.name}`, f: to.atis || to.twr || to.ctaf || "", st: wx, ap:to.id, leg:1, say:"",
       do:`Climb to ${f.alt||"your cruise altitude"}, lean, and set the heading. Halfway there, tune ${to.name} ${wx} and listen while you fly. Expect runway ${L[1].rwy ? rwySay(L[1].rwy) : "[check the weather]"}.`});
     s = s.concat(buildLeg(L[1]));
   }
@@ -507,7 +527,7 @@ function buildLeg(f){
     do: ap.gnd ? "Tower will tell you to turn off and contact Ground. Read that back first, then switch." : "No Ground frequency here: stay with Tower once you're past the hold short line."};
   if(f.flow==="tdep"){
     s.push(atisStep);
-    if(big) s.push({t:"Ask to leave", f:ap.clr, st:"Clearance", say:`${nm} Clearance, ${F}${stu}, VFR to ${f.dest||"[destination]"}, requesting ${f.alt||"[altitude]"}${wxc}.`,
+    if(big) s.push({t:"Ask to leave", f:ap.clr, st:"Clearance", say:`${nm} Clearance, ${F}${stu}, ${f.dest ? `VFR to ${f.dest}` : `VFR departure to the ${D}${f.back?", returning here":""}`}, requesting ${f.alt||"[altitude]"}${wxc}.`,
       atc:{says:"Cleared out of the Class C to the "+D+", maintain at or below 2,500, departure 125.3, squawk 4521.", rb:`…at or below 2,500, departure 125.3, squawk 4521, ${S}.`},
       do:"Write down the numbers they give you. Set the squawk. If they say the weather is too low, ask for Special VFR."});
     s.push({t:"Taxi", f:gf, st:G, say:`${nm} ${G}, ${F}${stu}, at ${ap.park}${wxc}, ready to taxi${big?"":`, VFR departure to the ${D}`}.`,
@@ -568,6 +588,33 @@ function buildLeg(f){
   return s;
 }
 
+// Pick (or change) where you land while flying. Choosing during the departure keeps your place; changing it on the
+// way in (a diversion) jumps to the en-route step for the new airport. Returns the new step index.
+function retarget(f, ap, at){
+  const was = build(f)[at] || {};
+  f.to = ap; f.toRwy = ap.id===f.ap.id ? f.rwy : (ap.activeRwy||""); f.atis = [(f.atis||[])[0]||"", ""];
+  const steps = build(f);
+  return was.leg ? steps.findIndex(s=>s.leg===1) : Math.min(at, steps.length-1);
+}
+function renderLand(){
+  const show = flight && DEPARTS(flight.flow);
+  $("land").classList.toggle("hidden", !show); if(!show) return;
+  const to = flight.to, back = isBack(flight);
+  $("land-now").innerHTML = !to ? "Where will you land? Pick any time, even in the air."
+    : back ? `Landing: back at <b>${esc(to.id)}</b>` : `Landing: <b>${esc(to.id)}</b> ${esc(to.name)}`;
+  $("land-back").textContent = `Back to ${flight.ap.id}`;
+  $("land-back").classList.toggle("hidden", back);
+  $("land-else").textContent = to && !back ? "Somewhere else" : "Somewhere else…";
+  $("land-none").classList.toggle("hidden", !to);
+}
+function landAt(ap){
+  if(!flight) return;
+  if(!ap){ flight.to = null; step = Math.min(step, build(flight).length-1); }
+  else step = retarget(flight, ap, step);
+  $("w-q").value = ""; $("w-res").classList.add("hidden"); $("w-find").classList.add("hidden");
+  renderStep();
+  if(ap) toast(isBack(flight) ? `Coming back to ${ap.id}. The arrival is added after "Out flying".` : `Landing at ${ap.id}. The arrival is added to your script.`);
+}
 function renderStep(){
   const steps = build(flight);
   step = Math.max(0, Math.min(step, steps.length-1));
@@ -590,6 +637,7 @@ function renderStep(){
     ${s.say ? `<p class="say">"${esc(sayNums(s.say))}"</p>` : `<p class="say none">Nothing to say yet. Listen.</p>`}
     ${atc}
     ${doBlock}</div>`;
+  renderLand();
   $("back").disabled = step===0;
   const last = step===steps.length-1;
   if(PATTERNS(flight.flow) && last){ $("next").textContent = flight.last ? "Done" : "Another lap"; }
@@ -611,20 +659,23 @@ function sourceLine(ap){
 // Destination on the setup screen.
 function pickTo(id, manual){
   const a = apGet(id); if(!a) return;
-  if(cur && a.id===cur.id){ toast("That's the airport you're leaving from.", true); return; }
   toAp = a; if(manual) toManual = true;
   $("t-q").value = ""; $("t-res").classList.add("hidden");
-  $("t-card").innerHTML = `<div class="apcard"><b>${esc(a.id)}</b> ${esc(a.name)} <small>${towered(a)?"Towered":"No tower, CTAF"}</small>
+  const back = cur && a.id===cur.id;
+  $("t-back").setAttribute("aria-pressed", back);
+  $("t-card").innerHTML = back ? `<div class="apcard"><b>Back to ${esc(a.id)}</b> <small>local flight: out, fly, come back</small>
+    <button class="ghost" id="t-clear" style="float:right">Clear</button><div class="hidden" id="t-fix"></div></div>` : `<div class="apcard"><b>${esc(a.id)}</b> ${esc(a.name)} <small>${towered(a)?"Towered":"No tower, CTAF"}</small>
     <button class="ghost" id="t-clear" style="float:right">Clear</button><br><small>${sourceLine(a)}</small>${freqRows(a)}
     ${a.region==="ICAO" ? ICAO_BANNER : ""}
     <p class="hint" style="margin:8px 0 0">Wrong? <button class="ghost" id="t-fix">Fix this airport</button></p></div>`;
   $("t-clear").onclick = ()=>clearTo(true);
   $("t-fix").onclick = ()=>{ document.querySelector('[data-tab="airports"]').click(); openEdit(a.id); };
   rwOpts(a, "t-rwy"); $("t-rest").classList.remove("hidden");
-  $("t-closed").checked = false; $("t-closed-wrap").classList.toggle("hidden", !towered(a));
+  if(back && $("f-rwy").value) $("t-rwy").value = $("f-rwy").value;
+  $("t-closed").checked = false; $("t-closed-wrap").classList.toggle("hidden", back || !towered(a));
 }
 function clearTo(manual){
-  toAp = null; if(manual) toManual = true;
+  toAp = null; if(manual) toManual = true; $("t-back").setAttribute("aria-pressed", false);
   $("t-card").innerHTML = ""; $("t-rest").classList.add("hidden"); $("t-rwy").innerHTML = ""; $("t-closed-wrap").classList.add("hidden");
 }
 // Offline "auto fill": an airport in no list becomes a local entry the pilot completes on the Airports tab.
@@ -642,13 +693,14 @@ function pick(id){
   cur = apGet(id); if(!cur) return;
   recent = [id, ...recent.filter(x=>x!==id)].slice(0,6); store.set("recent", recent);
   $("f-q").value = ""; $("f-res").classList.add("hidden");
-  if(toAp && toAp.id===cur.id) clearTo(false);
+  const wasBack = toAp && $("t-back").getAttribute("aria-pressed")==="true";
   $("f-card").innerHTML = `<div class="apcard"><b>${esc(cur.id)}</b> ${esc(cur.name)} <small>${towered(cur)?"Towered":"No tower, CTAF"}</small><br><small>${sourceLine(cur)}</small>${freqRows(cur)}
     ${cur.region==="ICAO" ? ICAO_BANNER : ""}
     <p class="hint" style="margin:8px 0 0">Wrong? <button class="ghost" id="fix">Fix this airport</button></p></div>`;
   $("fix").onclick = ()=>{ document.querySelector('[data-tab="airports"]').click(); openEdit(cur.id); };
   $("f-closed").checked = false; $("f-big").checked = bigField(cur); rwOpts(cur); renderFlows(); renderRecent();
   $("f-rest").classList.remove("hidden");
+  if(wasBack || (toAp && toAp.id===cur.id)) pickTo(cur.id, toManual);
 }
 function renderRecent(){
   $("recent").innerHTML = recent.map(id=>`<button data-id="${id}">${id}</button>`).join("");
@@ -665,7 +717,7 @@ function renderFlows(){
 }
 // The airport as it will be flown: a closed tower turns it into a CTAF field.
 const fromAp = () => cur && ($("f-closed").checked && towered(cur) ? asCtaf(cur) : {...cur, big: $("f-big").checked});
-const destAp = () => toAp && ($("t-closed").checked && towered(toAp) ? asCtaf(toAp) : toAp);
+const destAp = () => toAp && cur && toAp.id===cur.id ? fromAp() : toAp && ($("t-closed").checked && towered(toAp) ? asCtaf(toAp) : toAp);
 function resultsHTML(list, world, q){
   if(list.length) return list.map(r=>`<button data-id="${esc(r[0])}"><b>${esc(r[0])}</b> ${esc(r[1])}<br><small>${esc(r[2]||"")}, ${esc(r[3])}${world?" · worldwide":""}</small></button>`).join("");
   const id = (q||"").trim().toUpperCase();
@@ -725,6 +777,12 @@ $("f-res").onclick = e=>onResult(e, pick);
 $("recent").onclick = e=>{ const b=e.target.closest("[data-id]"); if(b) pick(b.dataset.id); };
 $("t-q").oninput = ()=>runSearch("t-q","t-res");
 $("t-res").onclick = e=>onResult(e, id=>pickTo(id, true));
+$("t-back").onclick = ()=>{ if(cur) pickTo(cur.id, true); };
+$("land-back").onclick = ()=>landAt(flight.ap);
+$("land-none").onclick = ()=>landAt(null);
+$("land-else").onclick = ()=>{ $("w-find").classList.toggle("hidden"); $("w-q").focus(); };
+$("w-q").oninput = ()=>runSearch("w-q","w-res");
+$("w-res").onclick = e=>onResult(e, id=>landAt(id===flight.ap.id ? flight.ap : apGet(id)));
 $("f-flow").onclick = e=>{ const v=e.target.dataset.v; if(!v) return; $("f-flow").dataset.v=v; renderFlows(); };
 $("f-closed").onchange = $("f-big").onchange = ()=>renderFlows();
 $("atis").innerHTML = `<option value="">—</option>` + Object.values(PHON).map(p=>`<option>${p}</option>`).join("");
@@ -1213,7 +1271,7 @@ function renderLive(st){
     lastLiveDst = dst;
   }
   if(flight){
-    [[icao,0],[dst,1]].forEach(([id, leg])=>{
+    [[icao,0],[flight.to ? flight.to.id : dst,1]].forEach(([id, leg])=>{
       const letter = id ? (String(wxFor(id).atis||"").match(/information\s+([A-Za-z]+)/i)||[])[1] : "";
       if(!letter) return; const L = letter[0].toUpperCase()+letter.slice(1).toLowerCase();
       if(PHON[L[0]]===L && flight.atis[leg]!==L){ flight.atis[leg]=L; renderStep(); }

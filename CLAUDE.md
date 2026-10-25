@@ -37,6 +37,13 @@ flow (`tdep`/`udep`): leg 0 departs `flight.ap`, then an "En route" step, then l
 or `uarr` depending on `towered(to)`. The inbound direction is `OPP[dir]` (fly out north, arrive from the south), so
 no coordinates are needed. Each step carries `ap` (ident, shown on the LCD) and `leg`; `flight.atis` is an array
 indexed by leg, and the ATIS select edits the current step's leg. "Pattern laps" and arrival flows ignore To.
+**No destination / back here / decide in the air:** To is optional. "Coming back here" sets To = From (`isBack(f)`):
+the arrival comes in from `f.dir` (the side you went out), the en-route step is "Out flying", and Class C clearance
+asks for "VFR departure to the <dir>, returning here" (no destination: no "[destination]" placeholder). On the flight
+screen, `#land` (`renderLand`) shows on departures: "Back to XXXX", "Somewhere else…" (search, `w-q`/`w-res`), "Not
+sure yet". `retarget(f, ap, step)` sets `f.to`, resets the leg-1 ATIS letter, keeps your place if you're still on the
+departure, and jumps to the en-route step if you were already on the arrival (a diversion). Live ATIS for leg 1 reads
+`flight.to`, not SI's filed destination.
 Setup fields: `toAp` (destination object), `t-rwy`, `t-pat`; `toManual` is true once the pilot picked or cleared To by
 hand, after which SayIntentions' flight plan no longer overrides it.
 
