@@ -64,6 +64,17 @@ button{cursor:pointer}
 .progress i.leg2.on{background:var(--atc)}
 .step-title{font-family:"Barlow Condensed",sans-serif;font-size:20px;font-weight:600;color:var(--dim);margin:4px 0 6px}
 .say{font-size:26px;line-height:1.3;font-weight:600;color:var(--say);margin:0 0 14px}
+.prac{margin:12px 0 0;padding:12px;border:2px solid var(--atc);border-radius:12px;background:var(--panel)}
+.pr-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.pr-head label{font-size:14px;color:var(--dim);display:flex;gap:6px;align-items:center}
+.pr-ask{margin:6px 0 10px;font-weight:600}
+.pr-in{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.pr-in input{flex:1 1 160px;min-width:0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:inherit}
+.prac .good,.prac .warn{margin:6px 0}
+#pracbtn[aria-pressed="true"]{background:var(--btn);color:var(--btnText);border-color:var(--btn)}
+#card.quiz .say:not(.none),#card.quiz .rb{filter:blur(7px);user-select:none}
+#card.quiz.peek .say,#card.quiz.peek .rb{filter:none}
+.spk{border:0;background:transparent;font-size:20px;padding:0 4px;vertical-align:middle;cursor:pointer}
 .say.none{font-size:20px;color:var(--dim);font-weight:500}
 .do{padding:12px;border-radius:12px;background:var(--soft);margin-bottom:10px}
 .atc{border-left:4px solid var(--atc);padding:8px 12px;margin-bottom:10px}
@@ -100,16 +111,16 @@ button{cursor:pointer}
 .live .heard b{color:var(--atc)}
 .live .rbk{font-size:22px;line-height:1.3;font-weight:600;color:var(--say);margin:6px 0}
 .live .mean{font-size:15px}
-.live .warn{margin-top:8px;color:#c2410c;font-weight:600}
-.live .good{margin-top:8px;color:#1f7a4d;font-weight:600}
-:root:not([data-theme="light"]) .live .good{color:#5fd39a}
+.live .warn,.prac .warn{margin-top:8px;color:#c2410c;font-weight:600}
+.live .good,.prac .good{margin-top:8px;color:#1f7a4d;font-weight:600}
+:root:not([data-theme="light"]) .live .good,:root:not([data-theme="light"]) .prac .good{color:#5fd39a}
 .chips.grade{margin:6px 0 0;gap:6px}
 .chips.grade .chip{padding:5px 10px;font-size:14px}
 .chips.grade .chip.ok{border-color:#2fa36b;color:#1f7a4d}
 .chips.grade .chip.miss{border-color:#d14343;color:#b32d2d;font-weight:600}
 :root:not([data-theme="light"]) .chips.grade .chip.ok{color:#5fd39a}
 :root:not([data-theme="light"]) .chips.grade .chip.miss{color:#ff8a80}
-:root:not([data-theme="light"]) .live .warn{color:#fbbf24}
+:root:not([data-theme="light"]) .live .warn,:root:not([data-theme="light"]) .prac .warn{color:#fbbf24}
 .hidden{display:none}
 .banner{margin:8px 0;padding:10px 12px;border-radius:10px;background:var(--soft);border-left:4px solid var(--say);font-size:14px;color:var(--ink)}
 .badge{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--atc);color:var(--atc);font-size:12px;font-weight:600;vertical-align:middle}
@@ -218,6 +229,7 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
       <div class="progress" id="prog"></div>
       <div id="fl-banner"></div>
       <div id="card"></div>
+      <div class="prac hidden" id="prac"></div>
       <div class="land hidden" id="land">
         <span class="hint" id="land-now"></span>
         <div class="chips">
@@ -232,6 +244,7 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
         <span class="hint" id="atis-for">ATIS letter</span><select id="atis"></select>
         <button class="ghost" id="bigbtn" aria-pressed="false" title="Cockpit text">Aa</button>
         <button class="ghost hidden" id="autobtn" aria-pressed="true" title="Move the script along with the real radio calls">Auto</button>
+        <button class="ghost" id="pracbtn" aria-pressed="false" title="Say each call out loud; the phone plays ATC and grades you">Practice</button>
         <button class="ghost" id="helpbtn" aria-pressed="false">Say again? Unable?</button>
         <button class="ghost" id="end">End flight</button>
       </div>
@@ -274,6 +287,8 @@ html[data-big] #bigbtn,.atisbar #bigbtn[aria-pressed="true"]{background:var(--bt
       <label><input type="checkbox" id="m-chunks"><span><b>Chunked readbacks</b><br><span class="hint">One line per item: runway, taxiways, hold short, callsign.</span></span></label>
       <label><input type="checkbox" id="m-big"><span><b>Cockpit text</b><br><span class="hint">Bigger, higher contrast, details folded away. The "Aa" button during a flight does the same.</span></span></label>
     </div>
+    <div class="field" id="m-rate-wrap"><label for="m-rate">Read-it-to-me speed (the 🔊 buttons and practice mode)</label>
+      <select id="m-rate"><option value="0.65">Slow</option><option value="0.8">Steady</option><option value="1">Normal</option><option value="1.15">Like real ATC</option></select></div>
     <div class="ladder hidden" id="m-mentor-wrap"><label><input type="checkbox" id="m-mentor"><span><b>Mentor mode: co-pilot says the readback out loud</b><br><span class="hint">Live only. Uses SayIntentions voice, up to 30 times per flight.</span></span></label></div>
     <p class="hint" id="m-preview"></p>
   </section>
@@ -417,8 +432,8 @@ function altWords(n){
 }
 const phonetic = s => s.split("").map(c => /\d/.test(c) ? NUM[+c].toLowerCase() : (PHON[c] || c)).join(" ");
 // Turn the numbers in something the PILOT says into the words they'd say. Never applied to what ATC says: that's what you hear.
-function sayNums(t){
-  if(!reads.words || !t) return t;
+function sayNums(t, force){
+  if((!reads.words && !force) || !t) return t;
   return t
     .replace(/\brunway (\d{1,2}[LRC]?)\b/gi, (m,r)=>`runway ${rwySay(r)}`)
     .replace(/\bClass ([A-E])\b/g, (m,c)=>`Class ${PHON[c]}`)
@@ -449,7 +464,24 @@ function rbHTML(rb){
 function applyReads(){
   document.documentElement.toggleAttribute("data-big", !!reads.big);
   ["words","chunks","big"].forEach(k=>{ const el = $("m-"+k); if(el) el.checked = !!reads[k]; });
+  if($("m-rate")) $("m-rate").value = String(reads.rate||0.8);
   const b = $("bigbtn"); if(b) b.setAttribute("aria-pressed", !!reads.big);
+}
+/* ===== Read it to me: the phone's own voice (free; SayIntentions' voice is only for Mentor) ===== */
+const CAN_SPEAK = typeof speechSynthesis !== "undefined";
+// What the speaker should say: numbers as words always (a TTS voice reads "121.9" as "one hundred twenty-one"), blanks as a pause.
+const spokenText = t => sayNums(String(t||"").replace(/\[[^\]]*\]/g, "…").replace(/…\s*…/g,"…"), true).replace(/\b(\d)(\d)(\d)\b/g, (m,a,b,c)=>spellDigits(a+b+c));
+function speak(text, who){
+  if(!CAN_SPEAK || !text) return Promise.resolve();
+  speechSynthesis.cancel();
+  return new Promise(res=>{
+    const u = new SpeechSynthesisUtterance(spokenText(text));
+    u.lang = "en-US"; u.rate = who==="atc" ? Math.min(1.1, (reads.rate||0.8)+0.2) : (reads.rate||0.8); u.pitch = who==="atc" ? 0.85 : 1;
+    // Some browsers never fire onend (no voice installed, tab in background): don't let practice hang on it.
+    const words = u.text.split(/\s+/).length, t = setTimeout(res, 1500 + words * 650 / u.rate);
+    u.onend = u.onerror = ()=>{ clearTimeout(t); res(); };
+    speechSynthesis.speak(u);
+  });
 }
 function setReads(patch){ reads = Object.assign({}, reads, patch); store.set("reads", reads); applyReads(); if(flight) renderStep(); }
 
@@ -744,14 +776,16 @@ function renderStep(){
   const hasLetter = stepAp && stepAp.wx==="atis";
   $("atis").classList.toggle("hidden", !hasLetter);
   $("atis-for").textContent = hasLetter ? (flight.to ? `${s.ap||flight.ap.id} ATIS letter` : "ATIS letter") : `No ATIS letter at ${s.ap||flight.ap.id}`;
-  const atc = s.atc ? `<div class="atc"><div class="who">If ATC says</div><p>"${esc(s.atc.says)}"</p><div class="rb">${s.atc.rb.startsWith("Nothing") ? esc(s.atc.rb) : "You read back: " + rbHTML(s.atc.rb)}</div></div>` : "";
+  const spk = k => CAN_SPEAK ? ` <button class="spk" data-speak="${k}" aria-label="Read it to me">🔊</button>` : "";
+  const atc = s.atc ? `<div class="atc"><div class="who">If ATC says</div><p>"${esc(s.atc.says)}"${spk("atc")}</p><div class="rb">${s.atc.rb.startsWith("Nothing") ? esc(s.atc.rb) : "You read back:" + spk("rb") + " " + rbHTML(s.atc.rb)}</div></div>` : "";
   const doBlock = !s.do ? "" : reads.big ? `<details class="do"><summary>What to do</summary><p>${esc(s.do)}</p></details>` : `<div class="do">${esc(s.do)}</div>`;
   $("card").innerHTML = `<div class="card-in">
     <div class="step-title">${step+1}. ${esc(s.t)}</div>
-    ${s.say ? `<p class="say">"${esc(sayNums(s.say))}"</p>` : `<p class="say none">Nothing to say yet. Listen.</p>`}
+    ${s.say ? `<p class="say">"${esc(sayNums(s.say))}"${CAN_SPEAK?` <button class="spk" data-speak="say" aria-label="Read it to me">🔊</button>`:""}</p>` : `<p class="say none">Nothing to say yet. Listen.</p>`}
     ${atc}
     ${doBlock}</div>`;
   renderLand();
+  renderPractice(s);
   if(!$("help").classList.contains("hidden")) renderHelp(s);
   $("back").disabled = step===0;
   const last = step===steps.length-1;
@@ -904,6 +938,66 @@ $("t-res").onclick = e=>onResult(e, id=>pickTo(id, true));
 $("t-back").onclick = ()=>{ if(cur) pickTo(cur.id, true); };
 function renderAuto(){ $("autobtn").classList.toggle("hidden", !LIVE); $("autobtn").setAttribute("aria-pressed", autoOn); }
 $("autobtn").onclick = ()=>{ autoOn = !autoOn; store.set("auto", autoOn); autoPending = null; renderAuto(); toast(autoOn ? "Auto: the script follows the real radio calls." : "Auto off: tap Next call yourself."); };
+/* Practice mode UI. Per step: your call (if any) -> ATC plays -> your readback (if any). */
+const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+let prac = {on:false, hide:store.get("pracHide", true), at:-1, phase:"", res:null, said:""};
+function pracStart(s){ prac.at = step; prac.res = null; prac.said = ""; prac.phase = s.say ? "call" : s.atc ? "atc" : "none"; if(prac.phase==="atc") pracATC(s); }
+async function pracATC(s){
+  prac.phase = "atc"; renderPractice(s);
+  await speak(s.atc.says, "atc");
+  if(prac.phase!=="atc" || build(flight)[step]!==undefined && prac.at!==step) return;
+  prac.phase = /^Nothing/.test(s.atc.rb) ? "done" : "readback"; prac.res = null; prac.said = ""; renderPractice(s);
+}
+function pracSubmit(text){
+  const steps = build(flight), s = steps[step]; text = String(text||"").trim(); if(!text) return;
+  const ap = s.leg ? flight.to : flight.ap;
+  prac.said = text; prac.res = practiceGrade(steps, step, prac.phase, text, ap.wx);
+  renderPractice(s);
+}
+function pracListen(){
+  if(!SR){ toast("Speech recognition isn't available in this browser. Type it instead.", true); return; }
+  const r = new SR(); r.lang = "en-US"; r.interimResults = false; r.maxAlternatives = 1;
+  $("pr-mic").textContent = "Listening…"; $("pr-mic").disabled = true;
+  r.onresult = e=>pracSubmit(e.results[0][0].transcript);
+  r.onerror = e=>toast(e.error==="not-allowed" ? "Allow the microphone for this page, or type it instead." : "Didn't catch that. Try again or type it.", true);
+  r.onend = ()=>{ const b = $("pr-mic"); if(b){ b.textContent = "🎙 Say it"; b.disabled = false; } };
+  r.start();
+}
+function renderPractice(s){
+  const box = $("prac"); box.classList.toggle("hidden", !prac.on);
+  $("card").classList.toggle("quiz", prac.on && prac.hide && prac.phase!=="done" && prac.phase!=="none" && !(prac.phase==="readback" && prac.res) && !(prac.phase==="call" && prac.res && !s.atc));
+  if(!prac.on) return;
+  if(prac.at!==step) pracStart(s);
+  const input = label => `<p class="pr-ask">${label}</p><div class="pr-in">${SR?`<button class="primary" id="pr-mic">🎙 Say it</button>`:""}
+      <input id="pr-text" placeholder="${SR?"or type what you'd say":"Type what you'd say"}" autocomplete="off"><button class="ghost" id="pr-check">Check</button></div>`;
+  const graded = prac.res ? `<p class="hint">You said: “${esc(prac.said)}”</p><div class="${prac.res.items.every(i=>i.ok)?"good":"warn"}">${prac.res.items.every(i=>i.ok)?"✓ Clean":`${pct(prac.res.score)}`}</div>${chipsHTML(prac.res.items)}` : "";
+  let body = "";
+  if(prac.phase==="none") body = `<p class="pr-ask">Nothing to say on this step. Read what to do, then go on.</p>`;
+  else if(prac.phase==="call") body = prac.res ? graded + (s.atc ? `<button class="primary" id="pr-atc">▶ Hear ATC's answer</button> <button class="ghost" id="pr-again">Try again</button>` : `<button class="ghost" id="pr-again">Try again</button>`)
+                                              : input(`Your turn: make this call out loud${prac.hide?" (the words are hidden; tap the card to peek)":""}.`);
+  else if(prac.phase==="atc") body = `<p class="pr-ask">🔊 ATC is talking. Listen…</p>`;
+  else if(prac.phase==="readback") body = prac.res ? graded + `<button class="ghost" id="pr-again">Try again</button> <button class="ghost" id="pr-replay">🔊 Hear ATC again</button>`
+                                                  : input("Now read it back.") + `<button class="ghost" id="pr-replay">🔊 Hear ATC again</button>`;
+  else if(prac.phase==="done") body = `<p class="pr-ask">Nothing to read back here. Keep flying.</p>`;
+  box.innerHTML = `<div class="pr-head"><b>Practice</b><label><input type="checkbox" id="pr-hide" ${prac.hide?"checked":""}> Hide my lines</label></div>${body}`;
+  const on = (id, fn) => { const el = $(id); if(el) el.onclick = fn; };
+  on("pr-mic", pracListen); on("pr-check", ()=>pracSubmit($("pr-text").value));
+  if($("pr-text")) $("pr-text").onkeydown = e=>{ if(e.key==="Enter") pracSubmit($("pr-text").value); };
+  on("pr-atc", ()=>pracATC(s)); on("pr-replay", ()=>speak(s.atc.says, "atc"));
+  on("pr-again", ()=>{ prac.res = null; prac.said = ""; renderPractice(s); });
+  $("pr-hide").onchange = ()=>{ prac.hide = $("pr-hide").checked; store.set("pracHide", prac.hide); renderPractice(s); };
+}
+$("pracbtn").onclick = ()=>{
+  prac.on = !prac.on; prac.at = -1; $("pracbtn").setAttribute("aria-pressed", prac.on);
+  if(!prac.on && CAN_SPEAK) speechSynthesis.cancel();
+  renderPractice(build(flight)[step]); if(prac.on) $("prac").scrollIntoView({behavior:"smooth", block:"nearest"});
+};
+$("card").onclick = e=>{
+  if($("card").classList.contains("quiz") && !e.target.closest("[data-speak]")){ $("card").classList.add("peek"); setTimeout(()=>$("card").classList.remove("peek"), 2500); return; }
+  const b = e.target.closest("[data-speak]"); if(!b) return;
+  const s = build(flight)[step], k = b.dataset.speak;
+  speak(k==="say" ? s.say : k==="atc" ? s.atc.says : s.atc.rb, k==="atc" ? "atc" : "me");
+};
 $("helpbtn").onclick = ()=>{ const h = $("help"), open = h.classList.toggle("hidden") === false;
   $("helpbtn").setAttribute("aria-pressed", open); if(open){ renderHelp(build(flight)[step]); h.scrollIntoView({behavior:"smooth", block:"start"}); } };
 $("land-back").onclick = ()=>landAt(flight.ap);
@@ -937,7 +1031,7 @@ $("next").onclick = ()=>{
   $("end").click();
 };
 $("back").onclick = ()=>{ step--; autoPending = null; renderStep(); };
-$("end").onclick = ()=>{ if(LIVE && flight && flight.to) bridgePost("/api/watch", {icao:""}); flight=null; $("flight").classList.add("hidden"); $("setup").classList.remove("hidden"); $("dock").classList.add("hidden"); };
+$("end").onclick = ()=>{ prac.on = false; prac.at = -1; $("pracbtn").setAttribute("aria-pressed", false); $("prac").classList.add("hidden"); $("card").classList.remove("quiz"); if(CAN_SPEAK) speechSynthesis.cancel(); if(LIVE && flight && flight.to) bridgePost("/api/watch", {icao:""}); flight=null; $("flight").classList.add("hidden"); $("setup").classList.remove("hidden"); $("dock").classList.add("hidden"); };
 
 $("a-q").oninput = ()=>runSearch("a-q","a-res");
 $("a-res").onclick = e=>onResult(e, openEdit);
@@ -962,6 +1056,8 @@ $("a-reset").onclick = ()=>{
 });
 $("m-type").onchange = $("m-type").oninput; $("m-student").onchange = $("m-student").oninput;
 ["words","chunks","big"].forEach(k=>$("m-"+k).onchange = ()=>setReads({[k]: $("m-"+k).checked}));
+$("m-rate").onchange = ()=>{ setReads({rate: +$("m-rate").value}); speak("Cirrus One Two Three Alpha Zulu, ready to taxi."); };
+if(!CAN_SPEAK) $("m-rate-wrap").classList.add("hidden");
 $("db-refresh").onclick = ()=>renderDebriefPick();
 $("db-pick").onchange = ()=>renderDebriefPick();
 $("bigbtn").onclick = ()=>setReads({big: !reads.big});
@@ -1147,6 +1243,30 @@ function readbackFor(text){
 
 /* ===== Debrief: grade what the pilot actually said against what was expected ===== */
 const NUMWORD = {zero:"0",oh:"0",one:"1",two:"2",three:"3",tree:"3",four:"4",fower:"4",five:"5",fife:"5",six:"6",seven:"7",eight:"8",nine:"9",niner:"9"};
+/* ===== Practice mode: say it out loud, the phone plays ATC, then grade it ===== */
+// How much of the scripted call you said: share of its words (3+ letters, after canon) that appear in what you said.
+function scriptMatch(expected, said){
+  const want = [...new Set(canon(expected).split(" ").filter(w=>w.length>=3 || /\d/.test(w)))], got = canon(said);
+  if(!want.length) return 1;
+  return want.filter(w=>wordRe(w).test(got)).length / want.length;
+}
+// Grade one practice answer. A call uses the Debrief rules plus closeness to the script; a readback uses gradeReadback.
+function practiceGrade(steps, i, phase, said, wx){
+  const s = steps[i];
+  if(phase==="readback") return gradeReadback(s.atc.says, said);
+  const first = !steps.slice(0, i).some(x=>x.say && x.st===s.st && x.ap===s.ap);
+  const ctaf = /CTAF/.test(s.st), g = ctaf ? {kind:"call", items:[]} : gradeCall(said, {station:s.st, firstContact:first, wx});
+  if(ctaf){
+    const t = canon(said), nm = canon(String(s.say).split(" traffic")[0]);
+    g.items.push({label:"Started with \"… traffic\"", ok: new RegExp(`^${nm.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")} traffic`).test(t)});
+    g.items.push(callsignCheck(t, false)); g.items[1] = {label:g.items[1].label, ok:!!g.items[1].test(t)};
+    g.items.push({label:"Ended with the airport name", ok: new RegExp(`${nm.split(" ").pop()}$`).test(t)});
+  }
+  const m = scriptMatch(s.say, said);
+  g.items.push({label:`Close to the script (${Math.round(m*100)}%)`, ok: m >= 0.7});
+  g.score = g.items.filter(x=>x.ok).length / g.items.length;
+  return g;
+}
 /* ===== Auto-advance: follow the real conversation through the script ===== */
 // What kind of instruction a controller line is. The steps' example ATC lines go through the same function, so a real call
 // can be matched to the step that expects it.
