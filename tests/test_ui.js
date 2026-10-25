@@ -253,6 +253,16 @@ eq(asCtaf(khky).ctaf, "122.8", "tower closed: SayIntentions' own CTAF beats the 
 liveFreq = {KHKY:{ctaf:"122.8", twr:"128.15"}};
 eq(asCtaf(khky).ctaf, "120.1", "tower closed by hand while SI still has a tower: tower frequency");
 liveFreq = {};
+// help card
+eval(grab("helpLines"));
+const hT = helpLines("Tower", "Hickory", "Cirrus Three Alpha Zulu", "Cirrus One Two Three Alpha Zulu");
+eq(hT[0].say, "Hickory Tower, Cirrus Three Alpha Zulu, say again.", "help: say again addressed to the current station");
+eq(hT.some(x=>x.say.includes("unable, request")), true, "help: unable");
+eq(hT.find(x=>x.when.startsWith("An emergency")).say.startsWith("Mayday, mayday, mayday, Hickory Tower, Cirrus One"), true, "help: mayday to the station, full callsign");
+eq(helpLines("Ground", "Hickory", "C3AZ", "C123AZ").some(x=>x.say.includes("progressive taxi")), true, "help: progressive taxi on ground");
+const hC = helpLines("CTAF", "Hickory", "C3AZ", "C123AZ");
+eq(hC.some(x=>/say again/.test(x.say)), false, "help: no 'say again' on CTAF (nobody answers)");
+eq(hC.find(x=>x.when.startsWith("An emergency")).say.startsWith("Mayday, mayday, mayday, C123AZ"), true, "help: CTAF mayday has no station name");
 // pattern readbacks
 eq(readbackFor("Runway 24, make left closed traffic, cleared for takeoff."), "Left closed traffic, cleared for takeoff runway 24"+C, "readback: closed traffic takeoff");
 eq(readbackFor("Runway 24, cleared touch and go."), "Cleared touch and go runway 24"+C, "readback: touch and go");
