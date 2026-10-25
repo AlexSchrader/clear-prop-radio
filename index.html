@@ -445,7 +445,12 @@ const flowFor = (kind, ap) => { const t = towered(ap); return kind==="pattern" ?
 const DEPARTS = f => f==="tdep" || f==="udep";
 const PATTERNS = f => f==="pattern" || f==="tpat";
 // Night or a part-time tower: the field becomes a CTAF airport, and the CTAF is (almost always) the tower frequency.
-const asCtaf = ap => ({...ap, ctaf: ap.twr || ap.ctaf, twr:"", gnd:"", clr:"", towerClosed:true});
+// SayIntentions runs this towered field with a CTAF and no tower (closed tonight, or SI has none here). SI won't answer as
+// Tower, so the script should be the CTAF one.
+const siNoTower = (lf, ap) => !!(lf && ap && towered(ap) && lf.ctaf && !lf.twr);
+// A CTAF SayIntentions gives for the field beats our guess (the tower frequency); the DB's own CTAF is often UNICOM.
+const asCtaf = ap => { const lf = typeof liveFreq === "object" && liveFreq[ap.id];
+  return {...ap, ctaf: (lf && !lf.twr && lf.ctaf) || ap.twr || ap.ctaf, twr:"", gnd:"", clr:"", towerClosed:true}; };
 // Busy (Class B/C) field: clearance and departure calls. The data has no airspace class, so guess: a real Clearance
 // Delivery frequency (not just Ground or Tower again) and no part-time-tower CTAF. The pilot can override it (ap.big).
 const bigField = ap => ap.big !== undefined ? !!ap.big : !!ap.clr && ap.clr!==ap.gnd && ap.clr!==ap.twr && ap.ctaf!==ap.twr;
@@ -609,6 +614,8 @@ function renderLand(){
 }
 function landAt(ap){
   if(!flight) return;
+  if(ap && ap.id!==flight.ap.id && LIVE && siNoTower(liveFreq[ap.id], ap)) ap = asCtaf(ap);
+  if(LIVE) bridgePost("/api/watch", {icao: ap && ap.id!==flight.ap.id ? ap.id : ""});
   if(!ap){ flight.to = null; step = Math.min(step, build(flight).length-1); }
   else step = retarget(flight, ap, step);
   $("w-q").value = ""; $("w-res").classList.add("hidden"); $("w-find").classList.add("hidden");
@@ -808,7 +815,7 @@ $("next").onclick = ()=>{
   $("end").click();
 };
 $("back").onclick = ()=>{ step--; renderStep(); };
-$("end").onclick = ()=>{ flight=null; $("flight").classList.add("hidden"); $("setup").classList.remove("hidden"); $("dock").classList.add("hidden"); };
+$("end").onclick = ()=>{ if(LIVE && flight && flight.to) bridgePost("/api/watch", {icao:""}); flight=null; $("flight").classList.add("hidden"); $("setup").classList.remove("hidden"); $("dock").classList.add("hidden"); };
 
 $("a-q").oninput = ()=>runSearch("a-q","a-res");
 $("a-res").onclick = e=>onResult(e, openEdit);
@@ -1239,8 +1246,9 @@ function renderLive(st){
   const dst = (f.destination && f.destination !== icao) ? f.destination : "";
   const wxFor = id => ((st.wx && st.wx.airports) || []).find(a=>a.airport===id) || {};
   // An airport outside the US DB may be in the worldwide file (NTTB is). Load it so the real name and frequencies win over SI's neighbour-mixed list.
-  if([icao, dst].some(id=>id && !BY.has(id) && !BYW.has(id))) loadWorld().catch(()=>{});
-  [[icao,"dep"],[dst,"arr"]].forEach(([id, mode])=>{
+  const picked = flight && flight.to && flight.to.id !== icao && flight.to.id !== dst ? flight.to.id : "";
+  if([icao, dst, picked].some(id=>id && !BY.has(id) && !BYW.has(id))) loadWorld().catch(()=>{});
+  [[icao,"dep"],[dst,"arr"],[picked,"arr"]].forEach(([id, mode])=>{
     if(!id) return;
     const row = BY.get(id) || BYW.get(id), known = row ? row[1] : "";
     liveFreq[id] = mapComms(st.wx && st.wx.comms, id, known);  // SayIntentions' frequencies override the built-in ones
@@ -1260,17 +1268,29 @@ function renderLive(st){
     liveAp = icao; lastLiveSig = sig; pick(icao);
     if(rwy && ![...$("f-rwy").options].some(o=>o.value===rwy)) $("f-rwy").insertAdjacentHTML("beforeend", `<option value="${esc(rwy)}">${esc(rwy)} · active now</option>`);
     if(rwy) $("f-rwy").value = rwy;
+    if(siNoTower(liveFreq[icao], cur)){ $("f-closed").checked = true; renderFlows(); toast(`SayIntentions has no tower at ${icao} right now, so you'll fly it as CTAF.`); }
     if(fresh && f.pattern_direction) $("f-pat").value = f.pattern_direction.toLowerCase()==="right"?"right":"left";
     // Flight plan from SayIntentions fills in the destination unless the pilot picked one by hand.
     if(dst && !toManual){
       // A filed destination means a departure, so switch off "Pattern laps" the first time we see it.
       if(dst !== lastLiveDst && $("f-flow").dataset.v !== "dep"){ $("f-flow").dataset.v = "dep"; renderFlows(); }
       pickTo(dst, false); const ar = liveRwy[dst].active; if(ar) $("t-rwy").value = ar;
+      if(toAp && toAp.id!==cur.id && siNoTower(liveFreq[dst], toAp)) $("t-closed").checked = true;
     }
     else if(!dst && !toManual && toAp) clearTo(false);
     lastLiveDst = dst;
   }
   if(flight){
+    // The weather for an airport picked in the air arrives a poll later: refresh it, and switch to CTAF if SI has no tower there.
+    const tid = flight.to && flight.to.id !== flight.ap.id ? flight.to.id : "";
+    if(tid && liveFreq[tid] && !flight.to.towerClosed){
+      const fresh = apGet(tid) || flight.to;
+      const next = siNoTower(liveFreq[tid], fresh) ? asCtaf(fresh) : {...fresh, big: flight.to.big};
+      if(JSON.stringify(next) !== JSON.stringify(flight.to)){
+        flight.to = next; renderStep();
+        if(next.towerClosed) toast(`SayIntentions has no tower at ${tid} right now. Your arrival there is CTAF calls.`);
+      }
+    }
     [[icao,0],[flight.to ? flight.to.id : dst,1]].forEach(([id, leg])=>{
       const letter = id ? (String(wxFor(id).atis||"").match(/information\s+([A-Za-z]+)/i)||[])[1] : "";
       if(!letter) return; const L = letter[0].toUpperCase()+letter.slice(1).toLowerCase();

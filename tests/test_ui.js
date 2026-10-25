@@ -123,7 +123,8 @@ var fullCS = () => "Cirrus One Two Three Alpha Zulu";   // shortCS is stubbed ne
 eval(js.match(/const rwySay = r => \{[\s\S]*?\n\};/)[0].replace("const ","var "));
 eval(js.match(/const towered = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const DEPARTS = [^\n]+/)[0].replace("const ","var "));
-for (const n of ["flowFor","PATTERNS","asCtaf","bigField"]) eval(js.match(new RegExp(`const ${n} = [^\\n]+`))[0].replace("const ","var "));
+eval(js.match(/const asCtaf = [\s\S]*?\};\n/)[0].replace("const ","var "));
+for (const n of ["flowFor","PATTERNS","bigField","siNoTower"]) eval(js.match(new RegExp(`const ${n} = [^\\n]+`))[0].replace("const ","var "));
 eval(js.match(/const OPP = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const looksLikeIdent = [^\n]+/)[0].replace("const ","var "));
 eval(js.match(/const wxPhrase = [^\n]+/)[0].replace("const ","var "));
@@ -242,6 +243,17 @@ at = build(fl).findIndex(x=>x.t==="Entering downwind");          // on the way i
 at = retarget(fl, khky, at);
 eq(build(fl)[at].t+"/"+fl.to.id, "En route to "+khky.name+"/KHKY", "diversion: jumps to en route for the new airport");
 eq(build(fl).filter(x=>x.leg===1).some(x=>x.t==="Call Tower"), true, "diversion: arrival rebuilt for a towered field");
+// SayIntentions running a towered field without a tower
+eq(siNoTower({ctaf:"128.15", wx:"awos"}, khky), true, "SI no tower: CTAF and no TWR at a towered field");
+eq(siNoTower({ctaf:"128.15", twr:"128.15"}, khky), false, "SI no tower: tower listed -> open");
+eq(siNoTower({wx:"none"}, khky), false, "SI no tower: no comms at all -> don't guess");
+eq(siNoTower({ctaf:"123.075"}, ktta), false, "SI no tower: untowered field is already CTAF");
+var liveFreq = {KHKY:{ctaf:"122.8"}};
+eq(asCtaf(khky).ctaf, "122.8", "tower closed: SayIntentions' own CTAF beats the tower frequency");
+liveFreq = {KHKY:{ctaf:"122.8", twr:"128.15"}};
+eq(asCtaf(khky).ctaf, "120.1", "tower closed by hand while SI still has a tower: tower frequency");
+liveFreq = {};
+// pattern readbacks
 eq(readbackFor("Runway 24, make left closed traffic, cleared for takeoff."), "Left closed traffic, cleared for takeoff runway 24"+C, "readback: closed traffic takeoff");
 eq(readbackFor("Runway 24, cleared touch and go."), "Cleared touch and go runway 24"+C, "readback: touch and go");
 eq(readbackFor("Cleared for the option, runway 6."), "Cleared for the option runway 6"+C, "readback: option");
