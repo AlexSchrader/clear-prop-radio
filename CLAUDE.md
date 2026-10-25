@@ -37,8 +37,73 @@ flow (`tdep`/`udep`): leg 0 departs `flight.ap`, then an "En route" step, then l
 or `uarr` depending on `towered(to)`. The inbound direction is `OPP[dir]` (fly out north, arrive from the south), so
 no coordinates are needed. Each step carries `ap` (ident, shown on the LCD) and `leg`; `flight.atis` is an array
 indexed by leg, and the ATIS select edits the current step's leg. "Pattern laps" and arrival flows ignore To.
+**No destination / back here / decide in the air:** To is optional. "Coming back here" sets To = From (`isBack(f)`):
+the arrival comes in from `f.dir` (the side you went out), the en-route step is "Out flying", and Class C clearance
+asks for "VFR departure to the <dir>, returning here" (no destination: no "[destination]" placeholder). On the flight
+screen, `#land` (`renderLand`) shows on departures: "Back to XXXX", "Somewhere else…" (search, `w-q`/`w-res`), "Not
+sure yet". `retarget(f, ap, step)` sets `f.to`, resets the leg-1 ATIS letter, keeps your place if you're still on the
+departure, and jumps to the en-route step if you were already on the arrival (a diversion). Live ATIS for leg 1 reads
+`flight.to`, not SI's filed destination.
 Setup fields: `toAp` (destination object), `t-rwy`, `t-pat`; `toManual` is true once the pilot picked or cleared To by
 hand, after which SayIntentions' flight plan no longer overrides it.
+
+## Towered and untowered airports (flowFor / bigField / asCtaf)
+The setup shows the same three chips everywhere (`KINDS`: Pattern laps, Depart, Arrive). `flowFor(kind, ap)` turns the
+choice into the concrete flow: `tpat`/`tdep`/`tarr` when `towered(ap)`, else `pattern`/`udep`/`uarr`.
+- **Tower closed** checkbox (From and To, shown only for towered fields): `asCtaf(ap)` clears twr/gnd/clr and sets the
+  CTAF to the tower frequency, so the CTAF scripts run unchanged.
+- **Busy airport** checkbox: `bigField(ap)` decides clearance and departure/approach calls. The data has no airspace
+  class, so the default is a guess: a Clearance freq that isn't Ground or Tower again, and no part-time-tower CTAF
+  (`ctaf === twr`). KRDU/KCLT are busy; KHKY (D = G) and KVNY (C = T) are Class D. `ap.big` overrides it.
+- Class D depart: Ground (or Tower if no Ground) with "VFR departure to the <dir>", Tower with direction, then "request
+  frequency change" (flight following hint if there's an Approach freq). Class D arrive: "Call Tower" 10 miles out.
+- `tpat` (towered pattern): taxi for closed traffic, "make left closed traffic, cleared for takeoff", one Downwind call
+  per lap ("cleared touch and go"/"cleared to land"), Climb out. A step with `lap:true` is where "Another lap" restarts.
+- `readbackParts` also handles pattern entries ("enter left downwind runway 24"), closed traffic, touch and go/option and
+  "report midfield"; `checksFor` grades them.
+- `flowNote()` puts one line under the chips saying what radio work to expect.
+
+## Live helpers for towered/untowered (siNoTower, setActiveRwy, /api/watch)
+- `siNoTower(liveFreq[id], ap)`: SI lists a CTAF and no TWR at a field our data says is towered (closed tonight, or SI
+  has no tower there). Live mode then ticks "Tower is closed" (From and To) and an in-air pick becomes `asCtaf`.
+  `asCtaf` prefers SI's own CTAF (via the global `liveFreq`) over the tower-frequency guess.
+- `liveRwyArr[icao]`: the airport you're at also gets SI's *arriving* runway; `setActiveRwy()` preselects it for Arrive
+  and the departing one otherwise. Airborne + `overall_intention` "arrival" switches the chip to Arrive.
+- `landAt()` posts `/api/watch` so the bridge fetches the picked airport's getWX; `renderLive` maps its comms/runways
+  as `picked` and refreshes `flight.to` when they arrive.
+
+## Flight following (ffOut / ffIn / ffCancel)
+`flight.ff` (checkbox on Depart). Class B/C origin: clearance asks "with flight following", the radar-terminated step
+is dropped and a handoff step added. Otherwise after leaving: "Ask for flight following" (VFR request), "Your request",
+"Radar contact", "Handed to the next controller". Arrival: Class C dest renames "Call Approach" to "Checking in with
+Approach"; Class D dest gets "Leaving flight following" (contact tower); CTAF dest gets radar service terminated. No
+destination: ends with "Ending flight following". `appName(ap)` = "<name> Approach" or "[name] Approach".
+
+## Auto-advance (atcKind / autoStep)
+`atcKind(text)` (after `canon`) → takeoff | land | term | squawk | taxi | entry | radar | contact | ahead | "". Steps'
+example `atc.says` go through the same function. `autoStep(steps, i, pending, ev)`: an ATC event jumps to the step
+(i..i+3) expecting that kind and sets `pending` unless the rb is "Nothing…"; a pilot event while `pending===i` is the
+readback (i+1); otherwise a call: the next step with `say` (i..i+2): with atc → go there if the text names its
+station; CTAF → move past it if the text says "traffic". SI flags `cleared_for_takeoff`/`_landing` (`flagOn`, which
+handles "0") count as ATC events. Comms present at page load never move anything (`liveSeeded`). Toggle `#autobtn`
+(live only, `cpr:auto`). Next/Back/Start reset `autoPending`.
+
+## Read it to me, practice mode, help card, trends
+- `speak(text, who)`: speechSynthesis, `spokenText()` = `sayNums(t, true)` + 3-digit groups spelled + blanks as pauses.
+  Rate `reads.rate` (Me tab `m-rate`); ATC voice a bit faster and lower. A timer resolves the promise if `onend` never
+  fires. Never touches SI's `sayAs` (that's Mentor, which costs money).
+- Practice (`prac`, `#prac` under the card, `#pracbtn`): phases call → atc (spoken) → readback, or none/done.
+  `practiceGrade(steps, i, phase, said, wx)`: readback = `gradeReadback`; call = `gradeCall` (first contact = no earlier
+  step with that station and airport) or, on CTAF, name first / callsign / name last; plus "Close to the script (n%)"
+  from `scriptMatch()` (≥ 70%). Speech recognition if `SpeechRecognition`/`webkitSpeechRecognition`, else typing.
+  "Hide my lines" (`cpr:pracHide`) blurs `.say`/`.rb` (`#card.quiz`, tap to peek). Every graded answer goes to
+  `cpr:practice` (last 300).
+- `helpLines(st, nm, S, F)` + `LIGHTS`: the "Say again? Unable?" card. No "say again" on CTAF; mayday on CTAF has no
+  station name.
+- `trends(sessions)`: sessions = saved flight debriefs + practice grouped by day. `missKey()` groups labels by habit
+  ("Runway 5R"/"Runway 24" → Runway). Rows need ≥2 misses and ≥30% miss rate; top 5 by misses, each with a
+  `TREND_TIPS` tip and ladder rung. Shown at the top of the Debrief tab (`#db-trends`) once there are 2+ sessions.
+- `canon()` now drops a sentence-ending full stop that isn't a decimal point ("point one." used to stay "one.").
 
 ## Airports in no list (offline "auto fill")
 A search that matches nothing offers "Add XXXX as a new airport" (`looksLikeIdent`, 3-4 alphanumerics). That writes
@@ -62,6 +127,7 @@ and everything else (name, frequencies, runways, parking) comes from the Airport
 | POST | `/api/coach` | `{id, atc_said, ...}` | Anthropic Messages API, only when `ANTHROPIC_API_KEY` is set |
 | POST | `/api/pause` | `{"value": 1\|0}` | `sapi/setPause?value=` and returns SAPI's JSON; the bridge tracks `paused` |
 | POST | `/api/tune` | `{"freq":"121.9","com":1,"mode":"standby"}` | `sapi/setFreq`. Mode defaults to **standby** so the pilot keeps the swap habit. Rejects anything outside 118.000-136.975 |
+| POST | `/api/watch` | `{"icao":"KHKY"}` | nothing directly: adds that ident to the `getWX` call (the airport picked in the air). `""` clears it; a new `flight_id` clears it. Rejects anything not 3-4 alphanumerics |
 | POST | `/api/mentor` | `{"message":"...","id":"<comm id>"}` | `sapi/sayAs?channel=INTERCOM1_IN&rephrase=0`. Message capped at 255 chars, max 30 per `flight_id`, duplicate comm ids skipped |
 
 SayIntentions sources: `http://localhost:63287/flightJSON`, then SAPI `getCommsHistory`, `getWX?with_comms=1`,
@@ -194,14 +260,12 @@ Tests in tests/test_ui.js cover sayNums (13 cases incl. "the 45" left alone), ch
 - (c) worldwide search: EGLL and RJTT by ident and by name ("heathrow", "haneda"); LEAP is *absent* (non-US small_airport), which is what the live fallback is for; no US rows.
 
 ## Backlog
-- "Read it to me": phone text-to-speech of the call at a slow pace (offered, not chosen yet).
 - ICAO phraseology variants of the scripts ("line up and wait", QNH/hPa, "taxi to holding point", conditional
   clearances). Today non-US airports only get the banner.
-- Single-airport *arrival* flows (`tarr`/`uarr` chosen on the From airport) still use the departing-runway logic for
-  "active now"; only the To leg uses `siRunways(..., "arr")`.
 - Service-worker cache versioning is manual (bump `CACHE` in sw.js); automate it from the build tool.
 - Port the Live panel into the Clear Prop iOS app. The bridge stays on the PC, and the app polls `/api/state` on
   the LAN.
-- Auto-advance the script step from `L:SIAI_FLIGHT_PHASE` and the clearance flags.
+- Auto-advance also from `L:SIAI_FLIGHT_PHASE` (today: ATC calls, pilot calls, and the clearance flags).
+- Tower-closed choice for an airport picked in the air offline (live mode detects it from SI).
 - Show the pause state from SayIntentions itself. Today the bridge only knows what it set, so a pause started in the
   sim isn't reflected.

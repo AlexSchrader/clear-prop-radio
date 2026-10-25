@@ -11,7 +11,7 @@ Reads (all documented by SayIntentions):
 Optional AI coaching: set ANTHROPIC_API_KEY before running.
 Standard library only - no pip install needed.
 """
-import json, os, socket, threading, time, urllib.parse, urllib.request
+import json, re, os, socket, threading, time, urllib.parse, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -55,7 +55,8 @@ def remember_comms(fid, comms):
             HIST_FILE.write_text(json.dumps(history), encoding="utf-8")
         except Exception as e:
             print("[history]", e)
-session = {"api_key": "", "flight_id": ""}   # server-side only, never sent to the phone
+session = {"api_key": "", "flight_id": "", "watch": ""}   # server-side only, never sent to the phone
+# "watch": an airport the pilot picked in the air (not in SI's flight plan); getWX includes it so its ATIS comes down too.
 mentor_used = {}                             # flight_id -> count
 mentor_seen = set()                          # comm ids already spoken
 
@@ -96,7 +97,9 @@ def poll():
                 print("[comms]", e)
             icao = flight.get("current_airport") or flight.get("origin") or ""
             # Weather and frequencies for the airport you're at AND the flight-plan destination, in one call.
-            ids = ",".join(dict.fromkeys(x for x in (icao, flight.get("destination") or "") if x))
+            with lock:
+                watch = session["watch"]
+            ids = ",".join(dict.fromkeys(x for x in (icao, flight.get("destination") or "", watch) if x))
             wx = state.get("wx", {})
             if ids and (ids != wx_icao or time.time() - wx_at > 120):
                 try:
@@ -106,6 +109,8 @@ def poll():
             fid = str(cf.get("flight_id") or fd.get("flight_id") or
                       f"{flight.get('callsign')}-{flight.get('origin')}-{flight.get('destination')}")
             with lock:
+                if session["flight_id"] and session["flight_id"] != fid:
+                    session["watch"] = ""          # a new flight forgets the last one's in-air pick
                 session.update(api_key=key, flight_id=fid)
                 if all_comms:
                     remember_comms(fid, all_comms)
@@ -149,6 +154,16 @@ def do_tune(p):
     com = 2 if str(p.get("com")) == "2" else 1
     mode = "active" if p.get("mode") == "active" else "standby"
     return sapi_action("setFreq", freq=f"{f:.3f}", com=com, mode=mode)
+
+
+def do_watch(p):
+    """The pilot picked where to land in the air: add that airport to the getWX call. Empty clears it."""
+    icao = str(p.get("icao") or "").strip().upper()
+    if icao and not re.fullmatch(r"[A-Z0-9]{3,4}", icao):
+        return {"error": f"{icao[:12]} isn't an airport code."}
+    with lock:
+        session["watch"] = icao
+    return {"ok": True, "watch": icao}
 
 
 def do_mentor(p):
@@ -231,7 +246,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        routes = {"/api/coach": coach, "/api/pause": do_pause, "/api/tune": do_tune, "/api/mentor": do_mentor}
+        routes = {"/api/coach": coach, "/api/pause": do_pause, "/api/tune": do_tune, "/api/mentor": do_mentor, "/api/watch": do_watch}
         fn = routes.get(self.path.split("?")[0])
         if not fn:
             return self._send(404, {"error": "not found"})

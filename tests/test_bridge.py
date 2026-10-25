@@ -63,7 +63,12 @@ wx = [c for c in calls if c[0] == "getWX"]
 ok(wx and wx[-1][1]["icao"] == "KTTA,KRDU" and wx[-1][1]["with_comms"] == "1", "getWX fetched for origin AND flight-plan destination in one call")
 h = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{ap}/api/history").read())
 ok(h["flight_id"] == "777" and [c["id"] for c in h["comms"]] == [11, 12], "/api/history returns the flight's comms in order")
+ok("error" in post("/api/watch", {"icao": "KRDU;rm"}), "watch rejects a non-ident")
+ok(post("/api/watch", {"icao": "khky"}) == {"ok": True, "watch": "KHKY"}, "watch accepts the in-air pick")
 time.sleep(4.5)   # another poll with the same comms must not duplicate them
+wx = [c for c in calls if c[0] == "getWX"]
+ok(wx[-1][1]["icao"] == "KTTA,KRDU,KHKY", "getWX also fetches the airport picked in the air")
+ok("watch" not in json.dumps(get("/api/state")), "watch stays server-side")
 h2 = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{ap}/api/history").read())
 ok(len(h2["comms"]) == 2, "/api/history dedupes by id across polls")
 ok(bridge.HIST_FILE.exists() and "777" in json.loads(bridge.HIST_FILE.read_text()), "history persisted to disk")
